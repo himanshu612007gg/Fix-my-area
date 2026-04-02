@@ -1,0 +1,37 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // The app now uses Firebase Auth for citizens, authorities, and admin.
+    // Admin approval state is stored in Firestore user documents and enforced in the UI.
+    // These rules keep the project authenticated-only without relying on legacy PIN flows.
+
+    match /users/{userId} {
+      allow read, create, update: if signedIn();
+      allow delete: if false;
+    }
+
+    match /posts/{postId} {
+      allow read, create, update, delete: if signedIn();
+    }
+
+    match /governmentSubmissions/{submissionId} {
+      allow read, create, update: if signedIn();
+      allow delete: if false;
+    }
+
+    match /userStats/{userId} {
+      allow read, create, update: if signedIn();
+      allow delete: if false;
+    }
+
+    match /tokens/{tokenId} {
+      allow read, create, update: if signedIn();
+      allow delete: if false;
+    }
+  }
+}
