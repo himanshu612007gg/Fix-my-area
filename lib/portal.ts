@@ -15,6 +15,14 @@ export interface RewardOption {
   description: string;
   cost: number;
   audience: 'citizen' | 'authority' | 'all';
+  providerName: string;
+  faceValue: string;
+  rewardKind: 'gift-card' | 'service-benefit' | 'certificate';
+  settlementChannel: string;
+  includes: string[];
+  deliveryWindow: string;
+  fulfillmentType: 'instant' | 'scheduled';
+  fulfillmentNote: string;
 }
 
 export const INDIA_STATES_AND_UTS = [
@@ -68,32 +76,64 @@ export const CATEGORY_META: Record<Category, { department: string; accent: strin
 
 export const REWARD_CATALOG: RewardOption[] = [
   {
-    id: 'travel-pass',
-    title: 'Public Transport Pass',
-    description: 'Redeem coins for a civic mobility support voucher.',
+    id: 'national-essentials-card',
+    title: 'National Essentials Gift Card',
+    description: 'A professionally issued digital gift card for daily essentials and partner marketplace purchases.',
     cost: 120,
     audience: 'all',
+    providerName: 'National Consumer Cooperative',
+    faceValue: 'Rs.150 stored value',
+    rewardKind: 'gift-card',
+    settlementChannel: 'National Rewards Settlement Desk',
+    includes: ['Instant coupon code', '4-digit claim PIN', 'Partner checkout usage note'],
+    deliveryWindow: 'Instant digital issuance',
+    fulfillmentType: 'instant',
+    fulfillmentNote: 'A secured coupon code and claim PIN are issued immediately and recorded in your redemption ledger.',
   },
   {
-    id: 'digital-certificate',
-    title: 'Digital Service Certificate',
-    description: 'Recognition certificate for sustained community contribution.',
+    id: 'mobility-topup-card',
+    title: 'Urban Mobility Gift Card',
+    description: 'Digital transit and mobility top-up card suited for metro, bus, and approved travel partner recharges.',
     cost: 180,
     audience: 'all',
+    providerName: 'Integrated Transit Partner Network',
+    faceValue: 'Rs.220 transit value',
+    rewardKind: 'gift-card',
+    settlementChannel: 'Mobility Benefits Counter',
+    includes: ['Redeemable coupon code', 'Transit partner PIN', 'Usage receipt reference'],
+    deliveryWindow: 'Instant access',
+    fulfillmentType: 'instant',
+    fulfillmentNote: 'The wallet settles the redemption instantly and stores the transit coupon in your gift card vault.',
   },
   {
-    id: 'citizen-camp-priority',
-    title: 'Citizen Camp Priority Slot',
-    description: 'Priority slot at a scheduled district grievance camp.',
+    id: 'citizen-family-care-card',
+    title: 'Citizen Family Care Gift Card',
+    description: 'A higher-tier citizen reward with a reusable digital coupon for approved wellness and family services.',
     cost: 220,
     audience: 'citizen',
+    providerName: 'Jan Seva Citizen Benefits Cell',
+    faceValue: 'Rs.275 citizen benefit value',
+    rewardKind: 'gift-card',
+    settlementChannel: 'District Citizen Rewards Cell',
+    includes: ['Secure coupon code', 'Claim PIN', 'Citizen benefits receipt note'],
+    deliveryWindow: 'Instant access',
+    fulfillmentType: 'instant',
+    fulfillmentNote: 'Citizen benefit cards are issued instantly after balance verification and remain available in transaction history.',
   },
   {
-    id: 'field-kit',
-    title: 'Field Response Kit',
-    description: 'Redeem for approved field support materials or equipment credits.',
+    id: 'field-support-card',
+    title: 'Field Support Gift Card',
+    description: 'A controlled operational gift card for workers and field authorities to claim approved support value.',
     cost: 260,
     audience: 'authority',
+    providerName: 'Public Works Support Desk',
+    faceValue: 'Rs.320 operational value',
+    rewardKind: 'gift-card',
+    settlementChannel: 'Field Logistics Redemption Unit',
+    includes: ['Operational coupon code', '4-digit release PIN', 'Settlement audit reference'],
+    deliveryWindow: 'Instant access',
+    fulfillmentType: 'instant',
+    fulfillmentNote: 'Operational support cards are released instantly and the coupon remains available for audit and re-copy.',
   },
 ];
 

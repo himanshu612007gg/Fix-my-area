@@ -1,5 +1,23 @@
 # Task Progress
 
+## 2026-04-08 Redemption Revamp
+
+### Task
+Revamp the community portal redemption system into a professional national-service style rewards center with reliable wallet sync, inline redemption management, transaction history, and reusable coupon codes for redeemed gift cards.
+
+### Execution Plan
+- [x] Step 1: Review the prompt, current wallet/redemption implementation, skill requirements, and mistakes log -> success criterion: failure points and UX gaps are documented.
+- [ ] Step 2: Refactor redemption persistence to keep wallet balances and redemption history in sync across cache/Firestore reads -> success criterion: reward history no longer disappears and redemptions store transaction-grade metadata.
+- [ ] Step 3: Rebuild the wallet and redemption UI into an inline portal workspace with managed catalogue, transaction records, and coupon copy actions -> success criterion: the old popup flow is removed and the new screen exposes clear redemption operations and history.
+- [ ] Step 4: Verify with typecheck/build and capture any available visual/runtime evidence -> success criterion: validation results and environment blockers are logged precisely.
+
+### Log
+- 2026-04-08T17:33:43.5589511+05:30 - Phase 0 complete. Prompt reviewed in full. Scope confirmed as redemption-system data + UX revamp, not a full portal redesign. Key issues identified: selection state in the redeem popup is loosely wired, reward history persistence can be overwritten by empty Firestore reads, and the current experience lacks transaction/coupon management expected from a professional service portal.
+- 2026-04-08T17:33:43.5589511+05:30 - Step 1 complete. Reviewed `.codex/SKILL.md`, `.codex/mistakes.md`, `.codex/progress.md`, `components/TokenWallet.tsx`, `lib/db.ts`, and `lib/portal.ts`. Watch note applied: use `npm.cmd` for script verification on this Windows setup.
+- 2026-04-08T18:20:00+05:30 - Step 2 complete. Refactored `lib/db.ts` and `lib/portal.ts` so the reward catalog is now gift-card oriented, reward redemptions store provider/value/coupon/transaction metadata, user stats are cached locally, wallet sync events propagate immediately, and redemption history merges cached + Firestore entries instead of being erased by empty remote reads.
+- 2026-04-08T18:35:00+05:30 - Step 3 complete. Rebuilt `components/TokenWallet.tsx` into an inline national-service redemption center with a managed catalog, settlement console, transaction ledger, gift card vault, complaint receipt section, and repeat copy actions for coupon codes and claim PINs. Updated `components/Navbar.tsx` to react to wallet-sync events so the displayed balance updates immediately after redemption.
+- 2026-04-08T18:48:00+05:30 - Step 4 complete. `pnpm.cmd exec tsc --noEmit` passed. `npm.cmd run build` and `node_modules\\.bin\\next.CMD build --webpack` both compiled the app before failing with the existing Windows `spawn EPERM` environment error. Playwright screenshot capture could not be set up in this workspace because `npx.cmd playwright --version` attempted a package fetch and failed with an `EPERM` npm-cache permission error, so visual evidence remains blocked by the local environment rather than the implementation itself.
+
 ## 2026-04-02 Portal Redesign
 
 ### Task

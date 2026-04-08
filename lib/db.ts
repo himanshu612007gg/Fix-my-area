@@ -16,6 +16,7 @@ import { getFirestoreDb, isFirebaseConfigured } from '@/lib/firebase';
 import { waitForFirebaseUser } from '@/lib/firebase-auth';
 import {
   type ComplaintLocation,
+  type RewardOption,
   buildJurisdictionLabel,
   computePostScore,
   formatLocationLabel,
@@ -153,15 +154,42 @@ export interface Token {
   status: 'active' | 'redeemed';
 }
 
+export interface RewardRedemption {
+  id: string;
+  userId: string;
+  rewardId: string;
+  rewardTitle: string;
+  rewardDescription: string;
+  rewardKind: RewardOption['rewardKind'];
+  providerName: string;
+  faceValue: string;
+  rewardItems: string[];
+  cost: number;
+  redeemedAt: string;
+  status: 'processing' | 'fulfilled';
+  deliveryWindow: string;
+  deliveryNote: string;
+  settlementChannel: string;
+  transactionReference: string;
+  walletBalanceBefore: number;
+  walletBalanceAfter: number;
+  couponCode?: string;
+  couponPin?: string;
+}
+
 export type PostReaction = 'like' | 'dislike';
 
 const CURRENT_USER_KEY = 'local_issues_current_user';
+const REWARD_HISTORY_KEY_PREFIX = 'local_reward_redemptions_';
+const USER_STATS_KEY_PREFIX = 'local_user_stats_';
+export const WALLET_SYNC_EVENT = 'community-portal:wallet-sync';
 const COLLECTIONS = {
   users: 'users',
   posts: 'posts',
   submissions: 'governmentSubmissions',
   userStats: 'userStats',
   tokens: 'tokens',
+  rewardRedemptions: 'rewardRedemptions',
 } as const;
 
 export const BADGE_DEFINITIONS: Record<BadgeType, Omit<Badge, 'earnedAt'>> = {
@@ -267,6 +295,10 @@ function tokensCollection() {
   return collection(getDb(), COLLECTIONS.tokens);
 }
 
+function rewardRedemptionsCollection() {
+  return collection(getDb(), COLLECTIONS.rewardRedemptions);
+}
+
 function isBrowser() {
   return typeof window !== 'undefined';
 }
@@ -281,6 +313,32 @@ function generateId(prefix: string) {
   }
 
   return `${prefix}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+function randomAlphaNumeric(length: number) {
+  const source = Math.random().toString(36).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (source.length >= length) {
+    return source.slice(0, length);
+  }
+
+  return `${source}${Math.random().toString(36).toUpperCase().replace(/[^A-Z0-9]/g, '')}`.slice(0, length);
+}
+
+function generateCouponCode() {
+  return `${randomAlphaNumeric(4)}-${randomAlphaNumeric(4)}-${randomAlphaNumeric(4)}`;
+}
+
+function generateCouponPin() {
+  return `${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+function generateTransactionReference() {
+  return `NRX-${Date.now().toString().slice(-8)}-${randomAlphaNumeric(4)}`;
+}
+
+function buildFallbackTransactionReference(id: string) {
+  const compact = id.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(-8).padStart(8, '0');
+  return `NRX-${compact}`;
 }
 
 function sortByDateDesc<T>(items: T[], pickDate: (item: T) => string | undefined) {
@@ -456,6 +514,36 @@ function normalizeToken(id: string, data: Partial<Token>): Token {
   };
 }
 
+function normalizeRewardRedemption(id: string, data: Partial<RewardRedemption>): RewardRedemption {
+  const walletBalanceAfter = typeof data.walletBalanceAfter === 'number' ? data.walletBalanceAfter : 0;
+  const walletBalanceBefore = typeof data.walletBalanceBefore === 'number'
+    ? data.walletBalanceBefore
+    : walletBalanceAfter + (typeof data.cost === 'number' ? data.cost : 0);
+
+  return {
+    id,
+    userId: data.userId || '',
+    rewardId: data.rewardId || '',
+    rewardTitle: data.rewardTitle || 'Portal reward',
+    rewardDescription: data.rewardDescription || 'Community portal reward redemption',
+    rewardKind: data.rewardKind || 'gift-card',
+    providerName: data.providerName || 'National Rewards Desk',
+    faceValue: data.faceValue || 'Benefit value pending confirmation',
+    rewardItems: Array.isArray(data.rewardItems) ? data.rewardItems.filter(Boolean) : [],
+    cost: typeof data.cost === 'number' ? data.cost : 0,
+    redeemedAt: data.redeemedAt || getNowIso(),
+    status: data.status === 'fulfilled' ? 'fulfilled' : 'processing',
+    deliveryWindow: data.deliveryWindow || 'Pending confirmation',
+    deliveryNote: data.deliveryNote || 'Reward request captured in the portal history.',
+    settlementChannel: data.settlementChannel || 'National Rewards Settlement Desk',
+    transactionReference: data.transactionReference || buildFallbackTransactionReference(id),
+    walletBalanceBefore,
+    walletBalanceAfter,
+    ...(data.couponCode ? { couponCode: data.couponCode } : {}),
+    ...(data.couponPin ? { couponPin: data.couponPin } : {}),
+  };
+}
+
 function saveCurrentUser(user: User | null) {
   if (!isBrowser()) {
     return;
@@ -488,6 +576,97 @@ function readCurrentUserCache(): User | null {
   }
 }
 
+function getRewardHistoryStorageKey(userId: string) {
+  return `${REWARD_HISTORY_KEY_PREFIX}${userId}`;
+}
+
+function getUserStatsStorageKey(userId: string) {
+  return `${USER_STATS_KEY_PREFIX}${userId}`;
+}
+
+function emitWalletSync(userId: string, stats?: UserStats, redemption?: RewardRedemption) {
+  if (!isBrowser() || !userId) {
+    return;
+  }
+
+  window.dispatchEvent(
+    new CustomEvent(WALLET_SYNC_EVENT, {
+      detail: {
+        userId,
+        ...(stats ? { stats } : {}),
+        ...(redemption ? { redemption } : {}),
+      },
+    }),
+  );
+}
+
+function readRewardRedemptionCache(userId: string): RewardRedemption[] {
+  if (!isBrowser() || !userId) {
+    return [];
+  }
+
+  const raw = localStorage.getItem(getRewardHistoryStorageKey(userId));
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Array<Partial<RewardRedemption>>;
+    return sortByDateDesc(
+      parsed.map(entry => normalizeRewardRedemption(entry.id || generateId('reward'), entry)),
+      redemption => redemption.redeemedAt,
+    );
+  } catch {
+    localStorage.removeItem(getRewardHistoryStorageKey(userId));
+    return [];
+  }
+}
+
+function saveRewardRedemptionCache(userId: string, redemptions: RewardRedemption[]) {
+  if (!isBrowser() || !userId) {
+    return;
+  }
+
+  localStorage.setItem(getRewardHistoryStorageKey(userId), JSON.stringify(redemptions));
+}
+
+function readUserStatsCache(userId: string): UserStats | null {
+  if (!isBrowser() || !userId) {
+    return null;
+  }
+
+  const raw = localStorage.getItem(getUserStatsStorageKey(userId));
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return normalizeUserStats(userId, JSON.parse(raw) as Partial<UserStats>);
+  } catch {
+    localStorage.removeItem(getUserStatsStorageKey(userId));
+    return null;
+  }
+}
+
+function saveUserStatsCache(userId: string, stats: UserStats) {
+  if (!isBrowser() || !userId) {
+    return;
+  }
+
+  localStorage.setItem(getUserStatsStorageKey(userId), JSON.stringify(stats));
+}
+
+function mergeRewardRedemptions(primary: RewardRedemption[], secondary: RewardRedemption[]) {
+  const merged = new Map<string, RewardRedemption>();
+
+  [...secondary, ...primary].forEach(entry => {
+    const normalized = normalizeRewardRedemption(entry.id, entry);
+    merged.set(normalized.id, normalized);
+  });
+
+  return sortByDateDesc([...merged.values()], redemption => redemption.redeemedAt);
+}
+
 async function persistUser(user: User) {
   await setDoc(doc(usersCollection(), user.id), user);
 }
@@ -502,11 +681,29 @@ async function persistSubmission(submission: GovernmentSubmission) {
 
 async function persistUserStats(stats: UserStats) {
   const normalized = normalizeUserStats(stats.userId, stats);
+  saveUserStatsCache(normalized.userId, normalized);
+  emitWalletSync(normalized.userId, normalized);
   await setDoc(doc(userStatsCollection(), normalized.userId), normalized);
 }
 
 async function persistToken(token: Token) {
   await setDoc(doc(tokensCollection(), token.id), token);
+}
+
+async function persistRewardRedemption(redemption: RewardRedemption) {
+  const normalized = normalizeRewardRedemption(redemption.id, redemption);
+  const cached = readRewardRedemptionCache(normalized.userId);
+  const nextCached = mergeRewardRedemptions([normalized], cached);
+
+  saveRewardRedemptionCache(normalized.userId, nextCached);
+  emitWalletSync(normalized.userId, undefined, normalized);
+
+  try {
+    await setDoc(doc(rewardRedemptionsCollection(), normalized.id), normalized);
+  } catch {
+    // Keep the wallet usable even when the optional history collection
+    // is unavailable or its Firestore rules haven't been deployed yet.
+  }
 }
 
 async function ensureUserStats(userId: string) {
@@ -1200,15 +1397,27 @@ export async function deletePost(postId: string, userId: string): Promise<boolea
 }
 
 export async function getUserStats(userId: string): Promise<UserStats> {
-  const snapshot = await getDoc(doc(userStatsCollection(), userId));
+  const cached = readUserStatsCache(userId);
 
-  if (!snapshot.exists()) {
-    const stats = normalizeUserStats(userId, { userId });
-    await persistUserStats(stats);
-    return stats;
+  try {
+    const snapshot = await getDoc(doc(userStatsCollection(), userId));
+
+    if (!snapshot.exists()) {
+      const stats = normalizeUserStats(userId, cached || { userId });
+      await persistUserStats(stats);
+      return stats;
+    }
+
+    const normalized = normalizeUserStats(snapshot.id, snapshot.data() as Partial<UserStats>);
+    saveUserStatsCache(userId, normalized);
+    return normalized;
+  } catch {
+    if (cached) {
+      return cached;
+    }
+
+    return normalizeUserStats(userId, { userId });
   }
-
-  return normalizeUserStats(snapshot.id, snapshot.data() as Partial<UserStats>);
 }
 
 export async function updateUserStats(userId: string, updates: Partial<UserStats>): Promise<UserStats> {
@@ -1278,6 +1487,23 @@ export async function getUserTokens(userId: string): Promise<Token[]> {
   const snapshot = await getDocs(query(tokensCollection(), where('userId', '==', userId)));
   const tokens = snapshot.docs.map(entry => normalizeToken(entry.id, entry.data() as Partial<Token>));
   return sortByDateDesc(tokens.filter(token => livePostIds.has(token.postId)), token => token.issuedAt);
+}
+
+export async function getUserRewardRedemptions(userId: string): Promise<RewardRedemption[]> {
+  const cached = readRewardRedemptionCache(userId);
+
+  try {
+    const snapshot = await getDocs(query(rewardRedemptionsCollection(), where('userId', '==', userId)));
+    const remote = sortByDateDesc(
+      snapshot.docs.map(entry => normalizeRewardRedemption(entry.id, entry.data() as Partial<RewardRedemption>)),
+      redemption => redemption.redeemedAt,
+    );
+    const merged = mergeRewardRedemptions(remote, cached);
+    saveRewardRedemptionCache(userId, merged);
+    return merged;
+  } catch {
+    return cached;
+  }
 }
 
 export async function getTokenById(tokenId: string): Promise<Token | null> {
@@ -1362,7 +1588,36 @@ export async function redeemCoins(userId: string, cost: number) {
   };
 
   await persistUserStats(nextStats);
-  return nextStats;
+  return { previousStats: stats, nextStats };
+}
+
+export async function redeemReward(userId: string, reward: RewardOption) {
+  const { previousStats, nextStats } = await redeemCoins(userId, reward.cost);
+  const redemption: RewardRedemption = {
+    id: generateId('reward'),
+    userId,
+    rewardId: reward.id,
+    rewardTitle: reward.title,
+    rewardDescription: reward.description,
+    rewardKind: reward.rewardKind,
+    providerName: reward.providerName,
+    faceValue: reward.faceValue,
+    rewardItems: reward.includes,
+    cost: reward.cost,
+    redeemedAt: getNowIso(),
+    status: reward.fulfillmentType === 'instant' ? 'fulfilled' : 'processing',
+    deliveryWindow: reward.deliveryWindow,
+    deliveryNote: reward.fulfillmentNote,
+    settlementChannel: reward.settlementChannel,
+    transactionReference: generateTransactionReference(),
+    walletBalanceBefore: previousStats.creditCoins,
+    walletBalanceAfter: nextStats.creditCoins,
+    couponCode: reward.rewardKind === 'gift-card' ? generateCouponCode() : undefined,
+    couponPin: reward.rewardKind === 'gift-card' ? generateCouponPin() : undefined,
+  };
+
+  await persistRewardRedemption(redemption);
+  return { stats: nextStats, redemption };
 }
 
 export function getPostPriority(post: Post) {

@@ -14,7 +14,7 @@ import {
   Target,
   Wallet,
 } from 'lucide-react';
-import { User, getUserStats } from '@/lib/db';
+import { User, WALLET_SYNC_EVENT, getUserStats } from '@/lib/db';
 import { Button } from '@/components/ui/button';
 
 type PageView = 'home' | 'reported' | 'leaderboard' | 'wallofwins' | 'government' | 'auth' | 'tokens' | 'admin';
@@ -42,8 +42,24 @@ export default function Navbar({ user, onLogout, pageView, onPageChange }: Navba
 
     void loadStats();
 
+    const handleWalletSync = (event: Event) => {
+      const detail = (event as CustomEvent<{ userId?: string; stats?: { creditCoins?: number } }>).detail;
+      if (!detail || detail.userId !== user.id || cancelled || !detail.stats) {
+        return;
+      }
+
+      setCoins(detail.stats.creditCoins ?? 0);
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener(WALLET_SYNC_EVENT, handleWalletSync);
+    }
+
     return () => {
       cancelled = true;
+      if (typeof window !== 'undefined') {
+        window.removeEventListener(WALLET_SYNC_EVENT, handleWalletSync);
+      }
     };
   }, [pageView, user.id]);
 
