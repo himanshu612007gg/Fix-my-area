@@ -102,11 +102,12 @@ export default function WallOfWins() {
             visiblePosts.map(post => (
               <Card key={post.id} className="portal-card overflow-hidden rounded-[1.75rem] border-border/70 bg-card/90">
                 <CardContent className="p-0">
-                  {post.photos[0] ? (
-                    <img src={post.resolutionPhoto || post.photos[0]} alt={post.title} className="h-56 w-full object-cover" />
+                  {post.resolutionPhoto ? (
+                    <img src={post.resolutionPhoto} alt={post.title} className="h-56 w-full object-cover" />
                   ) : (
-                    <div className="flex h-56 items-center justify-center bg-muted/20">
+                    <div className="flex h-56 flex-col items-center justify-center gap-3 bg-muted/20 px-6 text-center">
                       <ImageIcon className="h-10 w-10 text-primary" />
+                      <p className="text-sm text-muted-foreground">Resolution proof photo is still pending for this case.</p>
                     </div>
                   )}
                   <div className="p-5">

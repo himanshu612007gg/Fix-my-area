@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
+  ImageIcon,
   MessageSquare,
   Send,
   ShieldAlert,
@@ -72,6 +73,7 @@ export default function PostCard({ post, currentUserId, onLike, onDislike, onDel
   const hasDisliked = post.userDislikes.includes(currentUserId);
   const isOwner = post.userId === currentUserId;
   const priority = getPostPriority(post);
+  const resolutionProofPhoto = post.resolutionPhoto || '';
 
   const handleAddComment = async () => {
     if (!commentText.trim()) {
@@ -313,6 +315,34 @@ export default function PostCard({ post, currentUserId, onLike, onDislike, onDel
               <p className="mt-4 text-sm leading-6 text-foreground/80">{post.resolutionNotes}</p>
             )}
           </div>
+
+          {post.status === 'resolved' && (
+            <div className="overflow-hidden rounded-[1.5rem] border border-emerald-500/20 bg-emerald-500/5">
+              {resolutionProofPhoto ? (
+                <>
+                  <img
+                    src={resolutionProofPhoto}
+                    alt={`Resolution proof for ${post.title}`}
+                    className="h-56 w-full object-cover"
+                  />
+                  <div className="border-t border-emerald-500/10 px-4 py-3">
+                    <p className="text-sm font-semibold text-foreground">Resolution proof from the field team</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Uploaded on {new Date(post.resolvedAt || post.createdAt).toLocaleDateString('en-IN')}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <div className="flex h-56 flex-col items-center justify-center px-6 text-center">
+                  <ImageIcon className="h-10 w-10 text-emerald-600" />
+                  <p className="mt-4 text-lg font-semibold text-foreground">Resolution photo pending</p>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    The issue is marked resolved, and the field team can still upload the closure photo.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </Card>

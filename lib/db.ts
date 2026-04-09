@@ -24,9 +24,9 @@ import {
   getDepartmentForCategory,
 } from '@/lib/portal';
 
-export const ADMIN_USERNAME = 'admin';
-export const ADMIN_PASSWORD = 'admin123';
-export const ADMIN_EMAIL = 'admin@community-portal.local';
+export const ADMIN_USERNAME = 'r@bbit';
+export const ADMIN_PASSWORD = 'g@j@r@2007';
+export const ADMIN_EMAIL = 'rbt.ctrl.2007@community-portal.local';
 
 export type UserRole = 'citizen' | 'authority' | 'admin';
 export type UserApprovalStatus = 'not-required' | 'pending' | 'approved' | 'rejected';
@@ -983,7 +983,7 @@ export async function authenticateAdmin(profile: FirebasePasswordProfile): Promi
     const newUser: User = {
       id: profile.uid,
       email: normalizedEmail,
-      name: profile.name.trim() || 'Platform Admin',
+      name: profile.name.trim() || ADMIN_USERNAME,
       role: 'admin',
       createdAt: getNowIso(),
       approvalStatus: 'not-required',
@@ -1003,7 +1003,7 @@ export async function authenticateAdmin(profile: FirebasePasswordProfile): Promi
   const updatedUser = normalizeUser(existingUser.id, {
     ...existingUser,
     email: normalizedEmail,
-    name: existingUser.name || profile.name || 'Platform Admin',
+    name: existingUser.name || profile.name || ADMIN_USERNAME,
     authProvider: 'password',
     firebaseUid: profile.uid,
   });
@@ -1572,6 +1572,39 @@ export async function resolvePost(
   }
 
   return { post: resolvedPost, ...(tokenEarned ? { tokenEarned } : {}) };
+}
+
+export async function updateResolutionProof(
+  postId: string,
+  resolutionPhoto: string,
+  resolutionNotes?: string,
+): Promise<Post | null> {
+  const post = await getPostById(postId);
+  if (!post) {
+    return null;
+  }
+
+  if (!resolutionPhoto) {
+    throw new Error('A resolution proof photo is required.');
+  }
+
+  const updatedPost: Post = normalizePost(post.id, {
+    ...post,
+    resolutionPhoto,
+    ...(resolutionNotes?.trim() ? { resolutionNotes: resolutionNotes.trim() } : {}),
+  });
+
+  await persistPost(updatedPost);
+
+  const existingSubmission = await getSubmissionByPostId(postId);
+  if (existingSubmission) {
+    await persistSubmission({
+      ...existingSubmission,
+      post: updatedPost,
+    });
+  }
+
+  return updatedPost;
 }
 
 export async function redeemCoins(userId: string, cost: number) {

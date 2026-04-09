@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { BriefcaseBusiness, CheckCircle2, CircleAlert, Clock3, MapPinned, TrendingUp } from 'lucide-react';
+import { type ChangeEvent, useEffect, useMemo, useState } from 'react';
+import { BriefcaseBusiness, CheckCircle2, Clock3, ImagePlus, MapPinned, TrendingUp } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   getCurrentUser,
@@ -11,6 +11,7 @@ import {
   getUserStats,
   GovernmentSubmission,
   resolvePost,
+  updateResolutionProof,
   updateSubmissionStatus,
 } from '@/lib/db';
 import { Button } from '@/components/ui/button';
@@ -28,6 +29,8 @@ export default function GovernmentDashboard() {
   const [currentUserId, setCurrentUserId] = useState('');
   const [resolverCoins, setResolverCoins] = useState(0);
   const [authors, setAuthors] = useState<Record<string, string>>({});
+  const [resolutionDrafts, setResolutionDrafts] = useState<Record<string, string>>({});
+  const [updatingSubmissionId, setUpdatingSubmissionId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,21 +94,118 @@ export default function GovernmentDashboard() {
     setResolverCoins(stats?.creditCoins ?? 0);
   };
 
-  const handleStatusUpdate = async (submission: GovernmentSubmission, nextStatus: GovernmentSubmission['status']) => {
-    if (nextStatus === 'resolved' && currentUserId) {
-      const result = await resolvePost(submission.postId, currentUserId, '', 'Resolution marked through the field dashboard.');
+  const handleResolutionPhotoUpload = (submissionId: string, event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
 
-      if (result) {
-        toast.success('Complaint marked as resolved and reward coins issued.');
-        await refreshStats();
-      }
-
+    if (!file) {
       return;
     }
 
-    await updateSubmissionStatus(submission.id, nextStatus);
-    toast.success(`Complaint moved to ${statusLabels[nextStatus]}.`);
-    await refreshStats();
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please select an image file for the resolved-case proof.');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Resolved-case proof photo must be 5MB or smaller.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setResolutionDrafts(previous => ({
+        ...previous,
+        [submissionId]: reader.result as string,
+      }));
+      toast.success('Resolved-case proof photo added.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const clearResolutionDraft = (submissionId: string) => {
+    setResolutionDrafts(previous => {
+      const next = { ...previous };
+      delete next[submissionId];
+      return next;
+    });
+  };
+
+  const getResolutionPreview = (submission: GovernmentSubmission) => {
+    return resolutionDrafts[submission.id] || submission.post.resolutionPhoto || '';
+  };
+
+  const handleStatusUpdate = async (submission: GovernmentSubmission, nextStatus: GovernmentSubmission['status']) => {
+    setUpdatingSubmissionId(submission.id);
+
+    try {
+      if (nextStatus === 'resolved') {
+        if (!currentUserId) {
+          throw new Error('Unable to verify the logged-in authority account for this resolution.');
+        }
+
+        const resolutionPhoto = getResolutionPreview(submission);
+
+        if (!resolutionPhoto) {
+          throw new Error('Upload a resolved-case photo before marking this complaint as resolved.');
+        }
+
+        const result = await resolvePost(
+          submission.postId,
+          currentUserId,
+          resolutionPhoto,
+          'Closed with on-site photo proof from the assigned authority.',
+        );
+
+        if (!result) {
+          throw new Error('Unable to mark this complaint as resolved right now.');
+        }
+
+        clearResolutionDraft(submission.id);
+        toast.success('Complaint marked as resolved and proof photo published.');
+        await refreshStats();
+        return;
+      }
+
+      await updateSubmissionStatus(submission.id, nextStatus);
+      toast.success(`Complaint moved to ${statusLabels[nextStatus]}.`);
+      await refreshStats();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to update this complaint.');
+    } finally {
+      setUpdatingSubmissionId(null);
+    }
+  };
+
+  const handleResolutionProofSave = async (submission: GovernmentSubmission) => {
+    const resolutionPhoto = resolutionDrafts[submission.id];
+
+    if (!resolutionPhoto) {
+      toast.error('Upload a new proof photo before saving changes.');
+      return;
+    }
+
+    setUpdatingSubmissionId(submission.id);
+
+    try {
+      const updatedPost = await updateResolutionProof(
+        submission.postId,
+        resolutionPhoto,
+        submission.post.resolutionNotes || 'Closed with on-site photo proof from the assigned authority.',
+      );
+
+      if (!updatedPost) {
+        throw new Error('Unable to save the updated proof photo right now.');
+      }
+
+      clearResolutionDraft(submission.id);
+      toast.success('Resolved-case proof photo updated.');
+      await refreshStats();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to save the resolved-case photo.');
+    } finally {
+      setUpdatingSubmissionId(null);
+    }
   };
 
   const stats = {
@@ -195,6 +295,12 @@ export default function GovernmentDashboard() {
           ) : (
             filteredSubmissions.map(submission => {
               const priority = getPostPriority(submission.post);
+              const resolutionPreview = getResolutionPreview(submission);
+              const hasResolutionDraft = Boolean(resolutionDrafts[submission.id]);
+              const isUpdating = updatingSubmissionId === submission.id;
+              const isResolved = submission.status === 'resolved';
+              const canStartAction = submission.status === 'received' && !isUpdating;
+              const canResolve = !isResolved && Boolean(resolutionPreview) && Boolean(currentUserId) && !isUpdating;
 
               return (
                 <Card key={submission.id} className="portal-card rounded-[1.75rem] border-border/70 bg-card/90">
@@ -238,32 +344,95 @@ export default function GovernmentDashboard() {
                     </div>
 
                     <div className="space-y-3">
-                      <Button
-                        className="w-full rounded-full"
-                        disabled={submission.status === 'received'}
-                        variant={submission.status === 'received' ? 'secondary' : 'outline'}
-                        onClick={() => void handleStatusUpdate(submission, 'received')}
-                      >
-                        <CircleAlert className="mr-2 h-4 w-4" />
-                        Mark received
-                      </Button>
-                      <Button
-                        className="w-full rounded-full"
-                        disabled={submission.status === 'processing'}
-                        variant={submission.status === 'processing' ? 'secondary' : 'outline'}
-                        onClick={() => void handleStatusUpdate(submission, 'processing')}
-                      >
-                        <TrendingUp className="mr-2 h-4 w-4" />
-                        Start action
-                      </Button>
-                      <Button
-                        className="w-full rounded-full"
-                        disabled={submission.status === 'resolved'}
-                        onClick={() => void handleStatusUpdate(submission, 'resolved')}
-                      >
-                        <CheckCircle2 className="mr-2 h-4 w-4" />
-                        Mark resolved
-                      </Button>
+                      {resolutionPreview ? (
+                        <div className="overflow-hidden rounded-[1.25rem] border border-border/70 bg-muted/20">
+                          <img
+                            src={resolutionPreview}
+                            alt={`Resolved-case proof for ${submission.post.title}`}
+                            className="h-40 w-full object-cover"
+                          />
+                          <div className="border-t border-border/70 px-4 py-3 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                            Resolution proof photo
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="rounded-[1.25rem] border border-dashed border-border/70 bg-muted/15 p-4 text-sm text-muted-foreground">
+                          Upload a final on-site photo before closing this complaint.
+                        </div>
+                      )}
+
+                      <div className="space-y-2 rounded-[1.25rem] border border-border/70 bg-background/80 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                          {submission.status === 'resolved' ? 'Update proof photo' : 'Resolved-case proof'}
+                        </p>
+                        <input
+                          id={`resolution-photo-${submission.id}`}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={event => handleResolutionPhotoUpload(submission.id, event)}
+                        />
+                        <label
+                          htmlFor={`resolution-photo-${submission.id}`}
+                          className="flex cursor-pointer items-center justify-center gap-2 rounded-full border border-border/70 bg-card/70 px-4 py-3 text-sm font-medium text-foreground transition hover:bg-muted"
+                        >
+                          <ImagePlus className="h-4 w-4 text-primary" />
+                          {resolutionPreview ? 'Replace proof photo' : 'Upload proof photo'}
+                        </label>
+                        {hasResolutionDraft && (
+                          <button
+                            type="button"
+                            onClick={() => clearResolutionDraft(submission.id)}
+                            className="w-full rounded-full border border-border/70 px-4 py-2 text-sm text-muted-foreground transition hover:text-foreground"
+                          >
+                            Clear new photo
+                          </button>
+                        )}
+                        {isResolved && hasResolutionDraft && (
+                          <Button
+                            className="w-full rounded-full"
+                            variant="outline"
+                            disabled={isUpdating}
+                            onClick={() => void handleResolutionProofSave(submission)}
+                          >
+                            {isUpdating ? 'Saving proof photo...' : 'Save proof photo'}
+                          </Button>
+                        )}
+                        {isResolved && !hasResolutionDraft && (
+                          <p className="text-sm text-muted-foreground">
+                            Upload a replacement proof photo only if you need to update the existing closure photo.
+                          </p>
+                        )}
+                        {!isResolved && (
+                          <p className="text-sm text-muted-foreground">
+                            {resolutionPreview
+                              ? 'This proof photo will be published when you mark the complaint as resolved.'
+                              : 'Upload a final proof photo to enable resolution.'}
+                          </p>
+                        )}
+                      </div>
+
+                      {!isResolved && (
+                        <Button
+                          className="w-full rounded-full"
+                          disabled={!canStartAction}
+                          variant={submission.status === 'processing' ? 'secondary' : 'outline'}
+                          onClick={() => void handleStatusUpdate(submission, 'processing')}
+                        >
+                          <TrendingUp className="mr-2 h-4 w-4" />
+                          {submission.status === 'processing' ? 'Action started' : 'Start action'}
+                        </Button>
+                      )}
+                      {!isResolved && (
+                        <Button
+                          className="w-full rounded-full"
+                          disabled={!canResolve}
+                          onClick={() => void handleStatusUpdate(submission, 'resolved')}
+                        >
+                          <CheckCircle2 className="mr-2 h-4 w-4" />
+                          {isUpdating ? 'Saving...' : 'Mark resolved'}
+                        </Button>
+                      )}
                       <div className="rounded-[1.25rem] border border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground">
                         <div className="flex items-center gap-2">
                           <MapPinned className="h-4 w-4 text-primary" />

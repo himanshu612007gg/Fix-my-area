@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { CheckCircle2, Clock3, ShieldBan, ShieldCheck, Users, Workflow } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { CheckCircle2, Clock3, ImageIcon, ShieldBan, ShieldCheck, Users, Workflow } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   getAuthorityUsers,
@@ -47,14 +47,29 @@ export default function AdminDashboard({ currentUser }: AdminDashboardProps) {
   const pendingUsers = authorities.filter(user => user.approvalStatus === 'pending');
   const approvedUsers = authorities.filter(user => user.approvalStatus === 'approved');
   const rejectedUsers = authorities.filter(user => user.approvalStatus === 'rejected');
+  const resolvedSubmissions = useMemo(() => {
+    return submissions
+      .filter(item => item.status === 'resolved')
+      .sort((first, second) => {
+        return new Date(second.post.resolvedAt || second.submittedAt).getTime()
+          - new Date(first.post.resolvedAt || first.submittedAt).getTime();
+      });
+  }, [submissions]);
 
   const handleDecision = async (authorityUserId: string, status: 'approved' | 'rejected') => {
+    const wasApproved = userWasApproved(authorities, authorityUserId);
     setLoadingUserId(authorityUserId);
 
     try {
       const updated = await updateAuthorityApproval(authorityUserId, status, currentUser.id);
       setAuthorities(previous => previous.map(user => (user.id === authorityUserId ? updated : user)));
-      toast.success(status === 'approved' ? 'Authority access approved.' : 'Authority access rejected.');
+      toast.success(
+        status === 'approved'
+          ? 'Authority access approved.'
+          : wasApproved
+            ? 'Authority access removed.'
+            : 'Authority access rejected.',
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to update authority access.');
     } finally {
@@ -209,13 +224,77 @@ export default function AdminDashboard({ currentUser }: AdminDashboardProps) {
                     {user.approvedBy && (
                       <p className="text-xs text-muted-foreground">Approved by {user.approvedBy}</p>
                     )}
+                    {user.approvalStatus === 'approved' && (
+                      <div className="pt-2">
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => void handleDecision(user.id, 'rejected')}
+                          disabled={loadingUserId === user.id}
+                          className="rounded-full"
+                        >
+                          Remove access
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 ))
               )}
             </CardContent>
           </Card>
         </div>
+
+        <Card className="mt-8 rounded-[1.75rem] border-border/70 bg-card/85">
+          <CardHeader>
+            <CardTitle>Resolved case proof gallery</CardTitle>
+            <CardDescription>Review closure photos uploaded by field teams after complaints are resolved.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {resolvedSubmissions.length === 0 ? (
+              <div className="rounded-[1.5rem] border border-dashed border-border bg-muted/20 p-8 text-sm text-muted-foreground">
+                Resolved complaints with closure photos will appear here.
+              </div>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {resolvedSubmissions.map(submission => (
+                  <div key={submission.id} className="overflow-hidden rounded-[1.5rem] border border-border/70 bg-background/70">
+                    {submission.post.resolutionPhoto ? (
+                      <img
+                        src={submission.post.resolutionPhoto}
+                        alt={`Resolved-case proof for ${submission.post.title}`}
+                        className="h-44 w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-44 flex-col items-center justify-center gap-3 bg-muted/20 px-5 text-center">
+                        <ImageIcon className="h-9 w-9 text-primary" />
+                        <p className="text-sm text-muted-foreground">No closure photo uploaded yet.</p>
+                      </div>
+                    )}
+                    <div className="space-y-2 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="font-semibold text-foreground">{submission.post.title}</p>
+                        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-600">
+                          Resolved
+                        </span>
+                      </div>
+                      <p className="text-sm text-muted-foreground">{submission.post.assignedDepartment}</p>
+                      <p className="text-sm text-muted-foreground">{submission.post.jurisdictionLabel}</p>
+                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                        Closed {new Date(submission.post.resolvedAt || submission.submittedAt).toLocaleDateString('en-IN')}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
+}
+
+function userWasApproved(authorities: User[], authorityUserId: string) {
+  return authorities.some(user => user.id === authorityUserId && user.approvalStatus === 'approved');
 }

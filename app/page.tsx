@@ -99,6 +99,52 @@ export default function Page() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const syncCurrentUser = async () => {
+      const refreshedUser = await getCurrentUser();
+
+      if (cancelled) {
+        return;
+      }
+
+      setCurrentUser(refreshedUser);
+
+      if (!refreshedUser) {
+        setPageView('home');
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void syncCurrentUser();
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void syncCurrentUser();
+    }, 30000);
+
+    const handleWindowFocus = () => {
+      void syncCurrentUser();
+    };
+
+    window.addEventListener('focus', handleWindowFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleWindowFocus);
+    };
+  }, [currentUser?.id]);
+
   if (!hydrated) return null;
 
   const handleLogout = () => {

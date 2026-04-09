@@ -317,7 +317,7 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
           throw error;
         }
 
-        profile = await signUpWithFirebaseEmailPassword(ADMIN_EMAIL, adminForm.password, 'Platform Admin');
+        profile = await signUpWithFirebaseEmailPassword(ADMIN_EMAIL, adminForm.password, ADMIN_USERNAME);
       }
 
       await authenticateAdmin(profile);
@@ -481,11 +481,6 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
                       : 'Create account with Google'}
                 </button>
 
-                <div className="rounded-2xl border border-primary/10 bg-primary/5 p-4 text-sm leading-6 text-muted-foreground">
-                  Public profiles are no longer protected by a secret PIN. Citizens can use either Google or
-                  Email/Password, but Email/Password must be enabled in Firebase Authentication.
-                </div>
-
                 {!firebaseEnabled && (
                   <p className="text-sm text-amber-700 dark:text-amber-300">Firebase environment variables are required before auth can work.</p>
                 )}
@@ -566,14 +561,14 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
                   label="Username"
                   value={adminForm.username}
                   onChange={value => setAdminForm(prev => ({ ...prev, username: value }))}
-                  placeholder={ADMIN_USERNAME}
+                  placeholder="Enter admin username"
                 />
                 <TextInput
                   label="Password"
                   type="password"
                   value={adminForm.password}
                   onChange={value => setAdminForm(prev => ({ ...prev, password: value }))}
-                  placeholder={ADMIN_PASSWORD}
+                  placeholder="Enter admin password"
                 />
                 <ErrorBanner error={adminForm.error} />
 
@@ -586,11 +581,6 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
                   {adminForm.loading ? 'Opening admin panel...' : 'Enter admin panel'}
                   <Sparkles className="h-4 w-4" />
                 </button>
-
-                <div className="rounded-2xl border border-border/70 bg-muted/20 p-4 text-sm leading-6 text-muted-foreground">
-                  Default credentials for now: <span className="font-semibold text-foreground">{ADMIN_USERNAME}</span> /{' '}
-                  <span className="font-semibold text-foreground">{ADMIN_PASSWORD}</span>
-                </div>
               </div>
             </AuthShell>
           )}
