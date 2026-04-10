@@ -243,6 +243,7 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
                     key={post.id}
                     post={post}
                     currentUserId={user.id}
+                    currentUserRole={user.role}
                     onLike={() => handleReaction(post.id, 'like')}
                     onDislike={() => handleReaction(post.id, 'dislike')}
                     onDelete={() => void refreshDashboard()}

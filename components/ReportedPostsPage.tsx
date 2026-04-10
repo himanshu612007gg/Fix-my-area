@@ -133,6 +133,7 @@ export default function ReportedPostsPage({ user, onPostsChange }: ReportedPosts
                     key={post.id}
                     post={post}
                     currentUserId={user.id}
+                    currentUserRole={user.role}
                     onLike={() => handleReaction(post.id, 'like')}
                     onDislike={() => handleReaction(post.id, 'dislike')}
                     onDelete={() => void refreshPosts()}

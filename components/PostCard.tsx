@@ -16,13 +16,14 @@ import {
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { addComment, Comment, deleteComment, deletePost, getPostPriority, getUserById, Post, User } from '@/lib/db';
+import { addComment, Comment, deleteComment, deletePost, getPostPriority, getUserById, Post, User, UserRole } from '@/lib/db';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 
 interface PostCardProps {
   post: Post;
   currentUserId: string;
+  currentUserRole: UserRole;
   onLike: () => void | Promise<void>;
   onDislike: () => void | Promise<void>;
   onDelete?: () => void | Promise<void>;
@@ -35,7 +36,7 @@ const priorityTone: Record<string, string> = {
   resolved: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
 };
 
-export default function PostCard({ post, currentUserId, onLike, onDislike, onDelete }: PostCardProps) {
+export default function PostCard({ post, currentUserId, currentUserRole, onLike, onDislike, onDelete }: PostCardProps) {
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
   const [comments, setComments] = useState<Comment[]>(post.comments || []);
   const [commentText, setCommentText] = useState('');
@@ -71,7 +72,7 @@ export default function PostCard({ post, currentUserId, onLike, onDislike, onDel
 
   const hasLiked = post.userLikes.includes(currentUserId);
   const hasDisliked = post.userDislikes.includes(currentUserId);
-  const isOwner = post.userId === currentUserId;
+  const canDeletePost = currentUserRole === 'admin' || post.userId === currentUserId;
   const priority = getPostPriority(post);
   const resolutionProofPhoto = post.resolutionPhoto || '';
 
@@ -129,7 +130,7 @@ export default function PostCard({ post, currentUserId, onLike, onDislike, onDel
               </div>
             </div>
 
-            {isOwner && (
+            {canDeletePost && (
               <div>
                 {showDeleteConfirm ? (
                   <div className="flex flex-wrap items-center gap-2 rounded-[1rem] border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">

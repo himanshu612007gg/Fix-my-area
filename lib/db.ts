@@ -1372,7 +1372,14 @@ export async function deleteComment(postId: string, commentId: string, userId: s
 
 export async function deletePost(postId: string, userId: string): Promise<boolean> {
   const post = await getPostById(postId);
-  if (!post || post.userId !== userId) {
+  if (!post) {
+    return false;
+  }
+
+  const actingUser = await getUserById(userId);
+  const canDeleteOwnPost = post.userId === userId;
+  const isAdmin = actingUser?.role === 'admin';
+  if (!canDeleteOwnPost && !isAdmin) {
     return false;
   }
 

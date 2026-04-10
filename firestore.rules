@@ -6,6 +6,24 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isPostOwner() {
+      return signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    function isSubmissionOwner() {
+      return signedIn() && resource.data.post.userId == request.auth.uid;
+    }
+
+    function isTokenOwner() {
+      return signedIn() && resource.data.userId == request.auth.uid;
+    }
+
     // The app now uses Firebase Auth for citizens, authorities, and admin.
     // Admin approval state is stored in Firestore user documents and enforced in the UI.
     // These rules keep the project authenticated-only without relying on legacy PIN flows.
@@ -16,12 +34,13 @@ service cloud.firestore {
     }
 
     match /posts/{postId} {
-      allow read, create, update, delete: if signedIn();
+      allow read, create, update: if signedIn();
+      allow delete: if isAdmin() || isPostOwner();
     }
 
     match /governmentSubmissions/{submissionId} {
       allow read, create, update: if signedIn();
-      allow delete: if false;
+      allow delete: if isAdmin() || isSubmissionOwner();
     }
 
     match /userStats/{userId} {
@@ -31,7 +50,7 @@ service cloud.firestore {
 
     match /tokens/{tokenId} {
       allow read, create, update: if signedIn();
-      allow delete: if false;
+      allow delete: if isAdmin() || isTokenOwner();
     }
 
     match /rewardRedemptions/{redemptionId} {

@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Clock3, ImageIcon, ShieldBan, ShieldCheck, Users, Workflow } from 'lucide-react';
+import { CheckCircle2, Clock3, ImageIcon, ShieldBan, ShieldCheck, Trash2, Users, Workflow } from 'lucide-react';
 import { toast } from 'sonner';
 import {
+  deletePost,
   getAuthorityUsers,
   getGovernmentSubmissions,
   GovernmentSubmission,
@@ -21,6 +22,8 @@ export default function AdminDashboard({ currentUser }: AdminDashboardProps) {
   const [authorities, setAuthorities] = useState<User[]>([]);
   const [submissions, setSubmissions] = useState<GovernmentSubmission[]>([]);
   const [loadingUserId, setLoadingUserId] = useState<string | null>(null);
+  const [deletingPostId, setDeletingPostId] = useState<string | null>(null);
+  const [confirmDeletePostId, setConfirmDeletePostId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,6 +58,11 @@ export default function AdminDashboard({ currentUser }: AdminDashboardProps) {
           - new Date(first.post.resolvedAt || first.submittedAt).getTime();
       });
   }, [submissions]);
+  const moderationSubmissions = useMemo(() => {
+    return [...submissions].sort((first, second) => {
+      return new Date(second.submittedAt).getTime() - new Date(first.submittedAt).getTime();
+    });
+  }, [submissions]);
 
   const handleDecision = async (authorityUserId: string, status: 'approved' | 'rejected') => {
     const wasApproved = userWasApproved(authorities, authorityUserId);
@@ -74,6 +82,25 @@ export default function AdminDashboard({ currentUser }: AdminDashboardProps) {
       toast.error(error instanceof Error ? error.message : 'Unable to update authority access.');
     } finally {
       setLoadingUserId(null);
+    }
+  };
+
+  const handleDeleteComplaint = async (postId: string) => {
+    setDeletingPostId(postId);
+
+    try {
+      const deleted = await deletePost(postId, currentUser.id);
+      if (!deleted) {
+        throw new Error('Only admin accounts can remove complaints.');
+      }
+
+      setSubmissions(previous => previous.filter(item => item.postId !== postId));
+      setConfirmDeletePostId(null);
+      toast.success('Complaint removed from the portal.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to remove this complaint.');
+    } finally {
+      setDeletingPostId(null);
     }
   };
 
@@ -244,6 +271,87 @@ export default function AdminDashboard({ currentUser }: AdminDashboardProps) {
             </CardContent>
           </Card>
         </div>
+
+        <Card className="mt-8 rounded-[1.75rem] border-border/70 bg-card/85">
+          <CardHeader>
+            <CardTitle>Complaint moderation queue</CardTitle>
+            <CardDescription>Only admins can remove complaints that are off-topic, unrelated to public issues, or inappropriate.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {moderationSubmissions.length === 0 ? (
+              <div className="rounded-[1.5rem] border border-dashed border-border bg-muted/20 p-8 text-sm text-muted-foreground">
+                No complaints are available for moderation right now.
+              </div>
+            ) : (
+              moderationSubmissions.map(submission => (
+                <div key={submission.id} className="rounded-[1.5rem] border border-border/70 bg-background/70 p-5">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="portal-chip border-primary/20 bg-primary/10 text-primary">{submission.post.category}</span>
+                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                          submission.post.status === 'resolved'
+                            ? 'bg-emerald-500/10 text-emerald-600'
+                            : submission.post.status === 'in-progress'
+                              ? 'bg-amber-500/10 text-amber-600'
+                              : 'bg-sky-500/10 text-sky-600'
+                        }`}>
+                          {submission.post.status === 'in-progress' ? 'in progress' : submission.post.status}
+                        </span>
+                      </div>
+                      <p className="mt-3 text-lg font-semibold text-foreground">{submission.post.title}</p>
+                      <p className="mt-2 text-sm leading-6 text-muted-foreground">{submission.post.description}</p>
+                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground">
+                        <span>{submission.post.referenceNumber}</span>
+                        <span>{submission.post.assignedDepartment}</span>
+                        <span>{submission.post.jurisdictionLabel}</span>
+                        <span>Filed {new Date(submission.submittedAt).toLocaleDateString('en-IN')}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      {confirmDeletePostId === submission.postId ? (
+                        <>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => void handleDeleteComplaint(submission.postId)}
+                            disabled={deletingPostId === submission.postId}
+                            className="rounded-full"
+                          >
+                            Confirm remove
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setConfirmDeletePostId(null)}
+                            disabled={deletingPostId === submission.postId}
+                            className="rounded-full"
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => setConfirmDeletePostId(submission.postId)}
+                          className="rounded-full"
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Remove complaint
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
 
         <Card className="mt-8 rounded-[1.75rem] border-border/70 bg-card/85">
           <CardHeader>
