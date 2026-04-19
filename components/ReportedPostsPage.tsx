@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { ClipboardList, MapPin, ShieldCheck, TimerReset } from 'lucide-react';
-import { Category, getReportedPosts, Post, reactToPost, User } from '@/lib/db';
+import { Category, getReportedPosts, Post, upvotePost, User } from '@/lib/db';
+import { COMPLAINT_CATEGORIES } from '@/lib/portal';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import PostCard from '@/components/PostCard';
@@ -12,12 +13,10 @@ interface ReportedPostsPageProps {
   onPostsChange: () => void;
 }
 
-const categories: Array<Category | 'All'> = ['All', 'Infrastructure', 'Education', 'Electricity', 'Water', 'Roads', 'Healthcare', 'Other'];
-
 export default function ReportedPostsPage({ user, onPostsChange }: ReportedPostsPageProps) {
   const [posts, setPosts] = useState<Post[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<Category | 'All'>('All');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'in-progress' | 'resolved'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'submitted' | 'assigned' | 'in-progress' | 'resolved'>('all');
 
   useEffect(() => {
     let cancelled = false;
@@ -48,15 +47,18 @@ export default function ReportedPostsPage({ user, onPostsChange }: ReportedPosts
       .sort((first, second) => new Date(second.submittedToGovAt || second.createdAt).getTime() - new Date(first.submittedToGovAt || first.createdAt).getTime());
   }, [posts, selectedCategory, statusFilter]);
 
-  const handleReaction = async (postId: string, reaction: 'like' | 'dislike') => {
-    const updated = await reactToPost(postId, user.id, reaction);
+  const handleUpvote = async (postId: string) => {
+    const updated = await upvotePost(postId, user.id);
     setPosts(previous => previous.map(post => (post.id === postId ? updated : post)));
     onPostsChange();
   };
 
-  const openCount = posts.filter(post => post.status === 'open').length;
+  const submittedCount = posts.filter(post => post.status === 'submitted').length;
+  const assignedCount = posts.filter(post => post.status === 'assigned').length;
   const inProgressCount = posts.filter(post => post.status === 'in-progress').length;
   const resolvedCount = posts.filter(post => post.status === 'resolved').length;
+
+  const categories: Array<Category | 'All'> = ['All', ...COMPLAINT_CATEGORIES];
 
   return (
     <div className="min-h-screen bg-background py-8">
@@ -66,20 +68,25 @@ export default function ReportedPostsPage({ user, onPostsChange }: ReportedPosts
             <div>
               <div className="portal-chip border-primary/20 bg-primary/10 text-primary">
                 <ShieldCheck className="h-4 w-4" />
-                Administration tracking board
+                Complaint tracking board
               </div>
-              <h2 className="portal-title mt-5 text-4xl font-semibold text-foreground">Track complaints already routed to the district system.</h2>
+              <h2 className="portal-title mt-5 text-4xl font-semibold text-foreground">Track your complaints through every stage.</h2>
               <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">
-                This live board shows which complaints have been received, which ones are under action, and which have already been resolved by the assigned office.
+                Follow each complaint from Submitted → Assigned → In Progress → Resolved.
+                See SLA deadlines, assigned workers, and resolution proof photos.
               </p>
             </div>
-            <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-2">
               <div className="portal-stat">
-                <p className="text-sm text-muted-foreground">Open cases</p>
-                <p className="mt-2 text-3xl font-semibold text-foreground">{openCount}</p>
+                <p className="text-sm text-muted-foreground">Submitted</p>
+                <p className="mt-2 text-3xl font-semibold text-foreground">{submittedCount}</p>
               </div>
               <div className="portal-stat">
-                <p className="text-sm text-muted-foreground">Under action</p>
+                <p className="text-sm text-muted-foreground">Assigned</p>
+                <p className="mt-2 text-3xl font-semibold text-foreground">{assignedCount}</p>
+              </div>
+              <div className="portal-stat">
+                <p className="text-sm text-muted-foreground">In Progress</p>
                 <p className="mt-2 text-3xl font-semibold text-foreground">{inProgressCount}</p>
               </div>
               <div className="portal-stat">
@@ -93,14 +100,14 @@ export default function ReportedPostsPage({ user, onPostsChange }: ReportedPosts
         <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_320px]">
           <div>
             <div className="mb-6 flex flex-wrap gap-2">
-              {(['all', 'open', 'in-progress', 'resolved'] as const).map(status => (
+              {(['all', 'submitted', 'assigned', 'in-progress', 'resolved'] as const).map(status => (
                 <Button
                   key={status}
                   variant="ghost"
                   onClick={() => setStatusFilter(status)}
                   className={`rounded-full border ${statusFilter === status ? 'border-primary/30 bg-primary/10 text-primary' : 'border-border/70 bg-card/70'}`}
                 >
-                  {status === 'all' ? 'All statuses' : status}
+                  {status === 'all' ? 'All statuses' : status === 'in-progress' ? 'In Progress' : status.charAt(0).toUpperCase() + status.slice(1)}
                 </Button>
               ))}
             </div>
@@ -123,8 +130,8 @@ export default function ReportedPostsPage({ user, onPostsChange }: ReportedPosts
                 <Card className="rounded-[1.75rem] border-dashed border-border/70 bg-card/85">
                   <CardContent className="py-14 text-center">
                     <ClipboardList className="mx-auto h-10 w-10 text-primary" />
-                    <p className="mt-4 text-xl font-semibold text-foreground">No complaints found for this filter.</p>
-                    <p className="mt-2 text-sm text-muted-foreground">Try a different category or status to view district activity.</p>
+                    <p className="mt-4 text-xl font-semibold text-foreground">No complaints match this filter.</p>
+                    <p className="mt-2 text-sm text-muted-foreground">Try a different category or status.</p>
                   </CardContent>
                 </Card>
               ) : (
@@ -134,8 +141,7 @@ export default function ReportedPostsPage({ user, onPostsChange }: ReportedPosts
                     post={post}
                     currentUserId={user.id}
                     currentUserRole={user.role}
-                    onLike={() => handleReaction(post.id, 'like')}
-                    onDislike={() => handleReaction(post.id, 'dislike')}
+                    onUpvote={() => handleUpvote(post.id)}
                     onDelete={() => void refreshPosts()}
                   />
                 ))
@@ -148,13 +154,14 @@ export default function ReportedPostsPage({ user, onPostsChange }: ReportedPosts
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-xl">
                   <MapPin className="h-5 w-5 text-primary" />
-                  Routing rule
+                  Status guide
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-sm leading-6 text-muted-foreground">
-                <p>Complaints are sent to the local office immediately after filing.</p>
-                <p>District and locality indexing help the control room route them to the right department.</p>
-                <p>Public support and concern signals help prioritize oversight, not eligibility.</p>
+                <p><strong className="text-foreground">Submitted:</strong> Complaint received, pending admin review.</p>
+                <p><strong className="text-foreground">Assigned:</strong> A municipality worker has been assigned.</p>
+                <p><strong className="text-foreground">In Progress:</strong> Worker is actively working on it.</p>
+                <p><strong className="text-foreground">Resolved:</strong> Issue fixed with photo proof.</p>
               </CardContent>
             </Card>
 
@@ -162,13 +169,13 @@ export default function ReportedPostsPage({ user, onPostsChange }: ReportedPosts
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-xl">
                   <TimerReset className="h-5 w-5 text-primary" />
-                  Citizen guidance
+                  Tips
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-sm leading-6 text-muted-foreground">
-                <p>Keep the receipt ID ready for district helpdesk calls or grievance camp visits.</p>
-                <p>Use comments to add new evidence, escalation notes, or follow-up dates.</p>
-                <p>Resolved complaints automatically move into the public success stories wall.</p>
+                <p>Keep your complaint reference number for follow-ups.</p>
+                <p>Upvote similar complaints to increase their priority.</p>
+                <p>You'll see a notification when your complaint status changes.</p>
               </CardContent>
             </Card>
           </aside>

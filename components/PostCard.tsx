@@ -5,38 +5,77 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   ClipboardCheck,
   ImageIcon,
   MessageSquare,
   Send,
   ShieldAlert,
-  ThumbsDown,
-  ThumbsUp,
+  Timer,
   Trash2,
+  Users as UsersIcon,
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { addComment, Comment, deleteComment, deletePost, getPostPriority, getUserById, Post, User, UserRole } from '@/lib/db';
+import { formatSLARemaining, isSLABreached } from '@/lib/portal';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 
 interface PostCardProps {
   post: Post;
   currentUserId: string;
-  currentUserRole: UserRole;
-  onLike: () => void | Promise<void>;
-  onDislike: () => void | Promise<void>;
+  currentUserRole?: UserRole;
+  onUpvote: () => void | Promise<void>;
   onDelete?: () => void | Promise<void>;
 }
 
 const priorityTone: Record<string, string> = {
+  critical: 'bg-red-600/10 text-red-600 border-red-500/20',
   urgent: 'bg-rose-500/10 text-rose-600 border-rose-500/20',
   priority: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
   standard: 'bg-sky-500/10 text-sky-600 border-sky-500/20',
   resolved: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
 };
 
-export default function PostCard({ post, currentUserId, currentUserRole, onLike, onDislike, onDelete }: PostCardProps) {
+const statusSteps: Array<{ key: string; label: string }> = [
+  { key: 'submitted', label: 'Submitted' },
+  { key: 'assigned', label: 'Assigned' },
+  { key: 'in-progress', label: 'In Progress' },
+  { key: 'resolved', label: 'Resolved' },
+];
+
+function StatusStepper({ status }: { status: string }) {
+  const currentIndex = statusSteps.findIndex(s => s.key === status);
+
+  return (
+    <div className="flex items-center gap-1">
+      {statusSteps.map((step, i) => {
+        const isActive = i <= currentIndex;
+        const isCurrent = i === currentIndex;
+        return (
+          <div key={step.key} className="flex items-center gap-1">
+            <div className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.15em] transition-all ${
+              isCurrent
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : isActive
+                  ? 'bg-primary/15 text-primary'
+                  : 'bg-muted/40 text-muted-foreground'
+            }`}>
+              {isActive && i < currentIndex && <CheckCircle2 className="h-3 w-3" />}
+              {step.label}
+            </div>
+            {i < statusSteps.length - 1 && (
+              <div className={`h-0.5 w-3 rounded ${isActive ? 'bg-primary/40' : 'bg-muted/40'}`} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function PostCard({ post, currentUserId, currentUserRole, onUpvote, onDelete }: PostCardProps) {
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
   const [comments, setComments] = useState<Comment[]>(post.comments || []);
   const [commentText, setCommentText] = useState('');
@@ -70,11 +109,15 @@ export default function PostCard({ post, currentUserId, currentUserRole, onLike,
     };
   }, [comments, post.userId]);
 
-  const hasLiked = post.userLikes.includes(currentUserId);
-  const hasDisliked = post.userDislikes.includes(currentUserId);
+  const hasUpvoted = post.userUpvotes.includes(currentUserId);
   const canDeletePost = currentUserRole === 'admin' || post.userId === currentUserId;
   const priority = getPostPriority(post);
   const resolutionProofPhoto = post.resolutionPhoto || '';
+  const slaBreached = isSLABreached(post.slaDeadline, post.status);
+  const issueLocationSummary = [post.locationDetails?.locality, post.locationDetails?.landmark]
+    .filter(Boolean)
+    .join(', ');
+  const slaText = formatSLARemaining(post.slaDeadline, post.status);
 
   const handleAddComment = async () => {
     if (!commentText.trim()) {
@@ -96,7 +139,7 @@ export default function PostCard({ post, currentUserId, currentUserRole, onLike,
   };
 
   const handleDeletePost = async () => {
-    const deleted = await deletePost(post.id, currentUserId);
+    const deleted = await deletePost(post.id, currentUserId, currentUserRole);
     if (!deleted) {
       toast.error('Complaint could not be deleted.');
       return;
@@ -117,9 +160,6 @@ export default function PostCard({ post, currentUserId, currentUserRole, onLike,
                 <span className="portal-chip border-primary/20 bg-primary/10 text-primary">{post.category}</span>
                 <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] ${priorityTone[priority] || priorityTone.standard}`}>
                   {priority}
-                </span>
-                <span className="rounded-full border border-border/70 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                  {post.status === 'in-progress' ? 'In progress' : post.status}
                 </span>
               </div>
               <h3 className="mt-4 text-2xl font-semibold text-foreground">{post.title}</h3>
@@ -149,9 +189,6 @@ export default function PostCard({ post, currentUserId, currentUserRole, onLike,
                     >
                       Cancel
                     </button>
-                    <button type="button" onClick={() => setShowDeleteConfirm(false)} className="p-1">
-                      <X className="h-4 w-4" />
-                    </button>
                   </div>
                 ) : (
                   <button
@@ -161,25 +198,60 @@ export default function PostCard({ post, currentUserId, currentUserRole, onLike,
                     aria-label="Delete complaint"
                   >
                     <Trash2 className="h-4 w-4" />
-                    <span>Delete complaint</span>
+                    <span>Delete</span>
                   </button>
                 )}
               </div>
             )}
           </div>
 
-          <div className="mt-5 grid gap-3 md:grid-cols-3">
+          {/* Status stepper */}
+          <div className="mt-5">
+            <StatusStepper status={post.status} />
+          </div>
+
+          {/* SLA indicator */}
+          <div className={`mt-4 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${
+            slaBreached
+              ? 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'
+              : 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+          }`}>
+            <Timer className="h-3.5 w-3.5" />
+            {slaText}
+          </div>
+
+          {/* Duplicate indicator */}
+          {post.duplicateCount && post.duplicateCount > 1 && (
+            <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-sky-500/20 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-600 dark:text-sky-400">
+              <UsersIcon className="h-3.5 w-3.5" />
+              {post.duplicateCount} citizens reported this
+            </div>
+          )}
+
+          {/* Assigned worker */}
+          {post.assignedWorkerName && (
+            <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+              <ClipboardCheck className="h-3.5 w-3.5" />
+              Assigned to {post.assignedWorkerName}
+            </div>
+          )}
+
+          <div className="mt-5 grid gap-3 md:grid-cols-4">
             <div className="rounded-[1.25rem] border border-border/70 bg-muted/25 p-4">
               <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Jurisdiction</p>
               <p className="mt-2 font-medium text-foreground">{post.jurisdictionLabel}</p>
             </div>
             <div className="rounded-[1.25rem] border border-border/70 bg-muted/25 p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Assigned department</p>
+              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Department</p>
               <p className="mt-2 font-medium text-foreground">{post.assignedDepartment}</p>
             </div>
             <div className="rounded-[1.25rem] border border-border/70 bg-muted/25 p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Current office</p>
-              <p className="mt-2 font-medium text-foreground">{post.assignedOffice}</p>
+              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">PIN code</p>
+              <p className="mt-2 font-medium text-foreground">{post.locationDetails?.pincode || 'Not specified'}</p>
+            </div>
+            <div className="rounded-[1.25rem] border border-border/70 bg-muted/25 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Issue location</p>
+              <p className="mt-2 font-medium text-foreground">{issueLocationSummary || 'Not specified'}</p>
             </div>
           </div>
 
@@ -188,19 +260,11 @@ export default function PostCard({ post, currentUserId, currentUserRole, onLike,
           <div className="mt-6 flex flex-wrap gap-3">
             <Button
               variant="ghost"
-              onClick={() => void onLike()}
-              className={`rounded-full border px-4 ${hasLiked ? 'border-primary/30 bg-primary/10 text-primary' : 'border-border/70 bg-card/70'}`}
+              onClick={() => void onUpvote()}
+              className={`rounded-full border px-4 ${hasUpvoted ? 'border-primary/30 bg-primary/10 text-primary' : 'border-border/70 bg-card/70'}`}
             >
-              <ThumbsUp className="mr-2 h-4 w-4" />
-              {post.likes} support
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => void onDislike()}
-              className={`rounded-full border px-4 ${hasDisliked ? 'border-destructive/30 bg-destructive/10 text-destructive' : 'border-border/70 bg-card/70'}`}
-            >
-              <ThumbsDown className="mr-2 h-4 w-4" />
-              {post.dislikes} concern
+              <ChevronUp className="mr-1 h-4 w-4" />
+              {post.upvotes} upvote{post.upvotes !== 1 ? 's' : ''}
             </Button>
             <Button
               variant="ghost"
@@ -218,7 +282,7 @@ export default function PostCard({ post, currentUserId, currentUserRole, onLike,
                 <input
                   value={commentText}
                   onChange={event => setCommentText(event.target.value)}
-                  placeholder="Add a coordination note or citizen update"
+                  placeholder="Add a note or update"
                   className="flex-1 rounded-full border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary"
                 />
                 <Button onClick={() => void handleAddComment()} className="rounded-full">
@@ -233,7 +297,7 @@ export default function PostCard({ post, currentUserId, currentUserRole, onLike,
                     <div key={comment.id} className="rounded-[1.25rem] border border-border/60 bg-background/70 p-3">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <p className="font-medium text-foreground">{commentAuthors[comment.userId]?.name || 'Portal user'}</p>
+                          <p className="font-medium text-foreground">{commentAuthors[comment.userId]?.name || 'User'}</p>
                           <p className="text-xs text-muted-foreground">{new Date(comment.createdAt).toLocaleString('en-IN')}</p>
                         </div>
                         {isCommentOwner && (
@@ -252,13 +316,14 @@ export default function PostCard({ post, currentUserId, currentUserRole, onLike,
         </div>
 
         <div className="space-y-4">
+          {/* Before photo (evidence) */}
           {post.photos.length > 0 ? (
             <div className="overflow-hidden rounded-[1.5rem] border border-border/70 bg-muted/20">
               <div className="relative">
                 <img
                   src={post.photos[currentPhotoIndex]}
-                  alt={`Complaint evidence ${currentPhotoIndex + 1}`}
-                  className="h-72 w-full object-cover"
+                  alt={`Evidence ${currentPhotoIndex + 1}`}
+                  className="h-56 w-full object-cover"
                 />
                 {post.photos.length > 1 && (
                   <>
@@ -280,43 +345,21 @@ export default function PostCard({ post, currentUserId, currentUserRole, onLike,
                 )}
               </div>
               <div className="flex items-center justify-between border-t border-border/70 px-4 py-3 text-xs text-muted-foreground">
-                <span>Evidence {currentPhotoIndex + 1} of {post.photos.length}</span>
-                <span>{post.location || post.jurisdictionLabel}</span>
+                <span className="font-semibold uppercase tracking-wider">Before</span>
+                <span>Photo {currentPhotoIndex + 1} of {post.photos.length}</span>
               </div>
             </div>
           ) : (
-            <div className="flex h-72 flex-col items-center justify-center rounded-[1.5rem] border border-dashed border-border bg-muted/15 text-center">
+            <div className="flex h-56 flex-col items-center justify-center rounded-[1.5rem] border border-dashed border-border bg-muted/15 text-center">
               <ShieldAlert className="h-10 w-10 text-primary" />
-              <p className="mt-4 text-lg font-semibold text-foreground">Photo evidence pending</p>
+              <p className="mt-4 text-lg font-semibold text-foreground">No photo evidence</p>
               <p className="mt-2 max-w-xs text-sm text-muted-foreground">
-                The complaint is already routed, but field verification images can still be added later.
+                Photos can help the team verify the issue faster.
               </p>
             </div>
           )}
 
-          <div className="rounded-[1.5rem] border border-border/70 bg-background/80 p-4">
-            <div className="flex items-center gap-3">
-              {post.status === 'resolved' ? (
-                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-              ) : (
-                <ClipboardCheck className="h-5 w-5 text-primary" />
-              )}
-              <div>
-                <p className="text-sm font-semibold text-foreground">
-                  {post.status === 'resolved' ? 'Complaint resolved' : 'Filed with administration'}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {post.status === 'resolved'
-                    ? `Closed on ${new Date(post.resolvedAt || post.createdAt).toLocaleDateString('en-IN')}`
-                    : `Forwarded on ${new Date(post.submittedToGovAt || post.createdAt).toLocaleDateString('en-IN')}`}
-                </p>
-              </div>
-            </div>
-            {post.resolutionNotes && (
-              <p className="mt-4 text-sm leading-6 text-foreground/80">{post.resolutionNotes}</p>
-            )}
-          </div>
-
+          {/* After photo (resolution proof) - Before/After comparison */}
           {post.status === 'resolved' && (
             <div className="overflow-hidden rounded-[1.5rem] border border-emerald-500/20 bg-emerald-500/5">
               {resolutionProofPhoto ? (
@@ -327,23 +370,44 @@ export default function PostCard({ post, currentUserId, currentUserRole, onLike,
                     className="h-56 w-full object-cover"
                   />
                   <div className="border-t border-emerald-500/10 px-4 py-3">
-                    <p className="text-sm font-semibold text-foreground">Resolution proof from the field team</p>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-emerald-600">After (Fixed)</p>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      Uploaded on {new Date(post.resolvedAt || post.createdAt).toLocaleDateString('en-IN')}
+                      Resolved on {new Date(post.resolvedAt || post.createdAt).toLocaleDateString('en-IN')}
                     </p>
                   </div>
                 </>
               ) : (
-                <div className="flex h-56 flex-col items-center justify-center px-6 text-center">
+                <div className="flex h-40 flex-col items-center justify-center px-6 text-center">
                   <ImageIcon className="h-10 w-10 text-emerald-600" />
-                  <p className="mt-4 text-lg font-semibold text-foreground">Resolution photo pending</p>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    The issue is marked resolved, and the field team can still upload the closure photo.
-                  </p>
+                  <p className="mt-4 text-sm font-semibold text-foreground">Resolution photo pending</p>
                 </div>
               )}
             </div>
           )}
+
+          {/* Status info */}
+          <div className="rounded-[1.5rem] border border-border/70 bg-background/80 p-4">
+            <div className="flex items-center gap-3">
+              {post.status === 'resolved' ? (
+                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+              ) : (
+                <ClipboardCheck className="h-5 w-5 text-primary" />
+              )}
+              <div>
+                <p className="text-sm font-semibold text-foreground">
+                  {post.status === 'resolved' ? 'Complaint resolved' : `Status: ${post.status}`}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {post.status === 'resolved'
+                    ? `Closed on ${new Date(post.resolvedAt || post.createdAt).toLocaleDateString('en-IN')}`
+                    : `Filed on ${new Date(post.submittedToGovAt || post.createdAt).toLocaleDateString('en-IN')}`}
+                </p>
+              </div>
+            </div>
+            {post.resolutionNotes && (
+              <p className="mt-4 text-sm leading-6 text-foreground/80">{post.resolutionNotes}</p>
+            )}
+          </div>
         </div>
       </div>
     </Card>

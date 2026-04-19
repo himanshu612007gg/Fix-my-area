@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { BellRing, Coins, FileStack, Plus, ShieldCheck, Sparkles, TrendingUp } from 'lucide-react';
+import { BellRing, FileStack, Plus, ShieldCheck, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
-import { Category, getRegularPosts, getUserStats, Post, reactToPost, Token, User } from '@/lib/db';
+import { Category, getRegularPosts, getUserStats, Post, upvotePost, User } from '@/lib/db';
+import { COMPLAINT_CATEGORIES } from '@/lib/portal';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import CreatePostForm from '@/components/CreatePostForm';
@@ -14,14 +15,11 @@ interface HomePageProps {
   onPostsChange: () => void;
 }
 
-const categories: Array<Category | 'All'> = ['All', 'Infrastructure', 'Education', 'Electricity', 'Water', 'Roads', 'Healthcare', 'Other'];
-
 export default function HomePage({ user, onPostsChange }: HomePageProps) {
   const [posts, setPosts] = useState<Post[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<Category | 'All'>('All');
   const [sortBy, setSortBy] = useState<'top' | 'newest' | 'urgent'>('top');
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [coinBalance, setCoinBalance] = useState(0);
   const [submittedCount, setSubmittedCount] = useState(0);
 
   useEffect(() => {
@@ -35,7 +33,6 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
 
       if (!cancelled) {
         setPosts(nextPosts);
-        setCoinBalance(stats.creditCoins);
         setSubmittedCount(stats.postsCreated);
       }
     };
@@ -59,15 +56,16 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
 
       if (sortBy === 'urgent') {
         const statusWeight = (post: Post) => {
-          if (post.category === 'Healthcare') return 3;
-          if (post.category === 'Electricity' || post.category === 'Water') return 2;
+          if (post.category === 'Broken Streetlight') return 4;
+          if (post.category === 'Pothole') return 3;
+          if (post.category === 'Locality Cleanliness') return 2;
           return 1;
         };
 
-        return statusWeight(second) - statusWeight(first) || second.score - first.score;
+        return statusWeight(second) - statusWeight(first) || second.upvotes - first.upvotes;
       }
 
-      return second.score - first.score || second.likes - first.likes;
+      return second.score - first.score || second.upvotes - first.upvotes;
     });
   }, [posts, selectedCategory, sortBy]);
 
@@ -78,28 +76,29 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
     ]);
 
     setPosts(nextPosts);
-    setCoinBalance(stats.creditCoins);
     setSubmittedCount(stats.postsCreated);
   };
 
-  const handlePostCreated = async (token: Token) => {
+  const handlePostCreated = async () => {
     await refreshDashboard();
     setShowCreateForm(false);
     onPostsChange();
-    toast.success('Complaint filed with local administration.', {
-      description: `Receipt generated: ${token.id}. You also earned fresh credit coins.`,
+    toast.success('Complaint filed successfully!', {
+      description: 'Your complaint has been submitted with Jalandhar location details for admin assignment.',
       duration: 7000,
     });
   };
 
-  const handleReaction = async (postId: string, reaction: 'like' | 'dislike') => {
-    const updatedPost = await reactToPost(postId, user.id, reaction);
+  const handleUpvote = async (postId: string) => {
+    const updatedPost = await upvotePost(postId, user.id);
     setPosts(previous => previous.map(post => (post.id === postId ? updatedPost : post)));
     onPostsChange();
   };
 
   const activeCases = posts.filter(post => post.status !== 'resolved').length;
   const resolvedCases = posts.filter(post => post.status === 'resolved').length;
+
+  const categories: Array<Category | 'All'> = ['All', ...COMPLAINT_CATEGORIES];
 
   return (
     <div className="min-h-screen bg-background py-8">
@@ -109,24 +108,20 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
             <div>
               <div className="portal-chip border-primary/20 bg-primary/10 text-primary">
                 <ShieldCheck className="h-4 w-4" />
-                National public grievance desk
+                Civic issue reporting desk
               </div>
               <h2 className="portal-title mt-5 text-4xl font-semibold text-foreground lg:text-5xl">
-                Raise civic issues with direct routing to the right local office.
+                Report civic issues for your area and track their resolution.
               </h2>
               <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground">
-                Every complaint filed here is indexed by location, assigned to a department, and made visible to the
-                local administration immediately. Community feedback now uses support and concern signals instead of
-                threshold upvotes.
+                File complaints about potholes, broken streetlights, park maintenance, or cleanliness issues.
+                Each complaint includes Jalandhar district, PIN code, and exact spot details so admins can assign the right worker quickly.
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <Button onClick={() => setShowCreateForm(true)} className="rounded-full px-6">
                   <Plus className="mr-2 h-4 w-4" />
                   File a complaint
                 </Button>
-                <div className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-700 dark:text-emerald-300">
-                  {coinBalance} credit coins available
-                </div>
               </div>
             </div>
 
@@ -137,7 +132,7 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
                     <FileStack className="h-6 w-6" />
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Complaints filed</p>
+                    <p className="text-sm text-muted-foreground">Your complaints</p>
                     <p className="text-3xl font-semibold text-foreground">{submittedCount}</p>
                   </div>
                 </div>
@@ -148,7 +143,7 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
                     <BellRing className="h-6 w-6" />
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Active civic cases</p>
+                    <p className="text-sm text-muted-foreground">Active cases</p>
                     <p className="text-3xl font-semibold text-foreground">{activeCases}</p>
                   </div>
                 </div>
@@ -156,10 +151,10 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
               <div className="portal-stat">
                 <div className="flex items-center gap-3">
                   <div className="rounded-2xl bg-emerald-500/10 p-3 text-emerald-600">
-                    <Coins className="h-6 w-6" />
+                    <Sparkles className="h-6 w-6" />
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Resolved through portal</p>
+                    <p className="text-sm text-muted-foreground">Resolved</p>
                     <p className="text-3xl font-semibold text-foreground">{resolvedCases}</p>
                   </div>
                 </div>
@@ -173,10 +168,10 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
             <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-[2rem] border border-border/70 bg-card p-6 shadow-2xl">
               <div className="mb-6 flex items-start justify-between gap-4">
                 <div>
-                  <p className="portal-chip border-primary/20 bg-primary/10 text-primary">Complaint intake form</p>
-                  <h3 className="portal-title mt-4 text-3xl font-semibold text-foreground">File a location-indexed complaint</h3>
+                  <p className="portal-chip border-primary/20 bg-primary/10 text-primary">Complaint form</p>
+                  <h3 className="portal-title mt-4 text-3xl font-semibold text-foreground">File a civic complaint</h3>
                   <p className="mt-2 text-sm text-muted-foreground">
-                    Include district, locality, and evidence so the complaint reaches the correct administration desk immediately.
+                    Select the issue type, enter the Jalandhar PIN code and exact location, and upload photo evidence for faster assignment.
                   </p>
                 </div>
                 <button
@@ -196,9 +191,9 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
           <div>
             <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="text-2xl font-semibold text-foreground">Citizen complaint feed</h3>
+                <h3 className="text-2xl font-semibold text-foreground">Complaints feed</h3>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Browse top civic issues, support valid complaints, and follow the administration queue.
+                  Browse civic issues, upvote urgent ones, and track resolution status.
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -209,7 +204,7 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
                     onClick={() => setSortBy(option)}
                     className={`rounded-full border ${sortBy === option ? 'border-primary/30 bg-primary/10 text-primary' : 'border-border/70 bg-card/70'}`}
                   >
-                    {option === 'top' ? 'Top feed' : option === 'newest' ? 'Latest' : 'Urgent'}
+                    {option === 'top' ? 'Most Upvoted' : option === 'newest' ? 'Newest' : 'Most Urgent'}
                   </Button>
                 ))}
               </div>
@@ -233,8 +228,8 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
                 <Card className="rounded-[1.75rem] border-dashed border-border/70 bg-card/85">
                   <CardContent className="py-14 text-center">
                     <Sparkles className="mx-auto h-10 w-10 text-primary" />
-                    <p className="mt-4 text-xl font-semibold text-foreground">No complaints match this view yet.</p>
-                    <p className="mt-2 text-sm text-muted-foreground">Try a broader filter or file the first complaint for this category.</p>
+                    <p className="mt-4 text-xl font-semibold text-foreground">No complaints match this view.</p>
+                    <p className="mt-2 text-sm text-muted-foreground">Try a broader filter or file the first complaint.</p>
                   </CardContent>
                 </Card>
               ) : (
@@ -244,8 +239,7 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
                     post={post}
                     currentUserId={user.id}
                     currentUserRole={user.role}
-                    onLike={() => handleReaction(post.id, 'like')}
-                    onDislike={() => handleReaction(post.id, 'dislike')}
+                    onUpvote={() => handleUpvote(post.id)}
                     onDelete={() => void refreshDashboard()}
                   />
                 ))
@@ -256,26 +250,26 @@ export default function HomePage({ user, onPostsChange }: HomePageProps) {
           <aside className="space-y-5">
             <Card className="rounded-[1.75rem] border-border/70 bg-card/85">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-xl">
-                  <TrendingUp className="h-5 w-5 text-primary" />
-                  Feed logic
-                </CardTitle>
+                <CardTitle className="text-xl">SLA Deadlines</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-sm leading-6 text-muted-foreground">
-                <p>`Top feed` ranks complaints using support, concern signals, and recency.</p>
-                <p>`Urgent` brings healthcare, water, and electricity complaints to the front for quick visibility.</p>
-                <p>Every filed complaint is routed immediately; no threshold voting is required anymore.</p>
+                <div className="flex items-center justify-between"><span>🕳️ Pothole</span><span className="font-semibold text-foreground">7 days</span></div>
+                <div className="flex items-center justify-between"><span>💡 Broken Streetlight</span><span className="font-semibold text-foreground">48 hours</span></div>
+                <div className="flex items-center justify-between"><span>🌳 Park Maintenance</span><span className="font-semibold text-foreground">5 days</span></div>
+                <div className="flex items-center justify-between"><span>🧹 Locality Cleanliness</span><span className="font-semibold text-foreground">3 days</span></div>
               </CardContent>
             </Card>
 
             <Card className="rounded-[1.75rem] border-border/70 bg-card/85">
               <CardHeader>
-                <CardTitle className="text-xl">What changed</CardTitle>
+                <CardTitle className="text-xl">How it works</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-sm leading-6 text-muted-foreground">
-                <p>Complaints now receive a national portal receipt at the time of filing.</p>
-                <p>District, locality, ward, and PIN code are used to index the local administration office.</p>
-                <p>Citizens earn credit coins for each complaint and can redeem them from the wallet tab.</p>
+                <p>📋 File a complaint with photos, Jalandhar PIN code, and exact issue location.</p>
+                <p>🔄 Admin reviews the complaint details and assigns the right municipality worker.</p>
+                <p>🔨 Worker updates status as work progresses.</p>
+                <p>📸 Worker uploads "after fix" photo as resolution proof.</p>
+                <p>⬆️ Upvote complaints to show urgency to the municipality.</p>
               </CardContent>
             </Card>
           </aside>

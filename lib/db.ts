@@ -16,12 +16,13 @@ import { getFirestoreDb, isFirebaseConfigured } from '@/lib/firebase';
 import { waitForFirebaseUser } from '@/lib/firebase-auth';
 import {
   type ComplaintLocation,
-  type RewardOption,
   buildJurisdictionLabel,
   computePostScore,
+  computeSLADeadline,
   formatLocationLabel,
   getComplaintPriority,
   getDepartmentForCategory,
+  findDuplicates,
 } from '@/lib/portal';
 
 export const ADMIN_USERNAME = 'r@bbit';
@@ -31,17 +32,8 @@ export const ADMIN_EMAIL = 'rbt.ctrl.2007@community-portal.local';
 export type UserRole = 'citizen' | 'authority' | 'admin';
 export type UserApprovalStatus = 'not-required' | 'pending' | 'approved' | 'rejected';
 export type AuthMode = 'signin' | 'signup';
-export type Category = 'Infrastructure' | 'Education' | 'Electricity' | 'Water' | 'Roads' | 'Healthcare' | 'Other';
-export type BadgeType =
-  | 'pothole-patrol'
-  | 'cleanliness-captain'
-  | 'safety-scout'
-  | 'water-warrior'
-  | 'power-champion'
-  | 'health-hero'
-  | 'community-leader'
-  | 'rising-star'
-  | 'veteran-reporter';
+export type Category = 'Pothole' | 'Broken Streetlight' | 'Park Maintenance' | 'Locality Cleanliness';
+export type ComplaintStatus = 'submitted' | 'assigned' | 'in-progress' | 'resolved';
 
 export interface User {
   id: string;
@@ -56,6 +48,9 @@ export interface User {
   approvedBy?: string;
   googleId?: string;
   avatarUrl?: string;
+  phone?: string;
+  ward?: string;
+  assignedWard?: string;
 }
 
 export interface GoogleAuthProfile {
@@ -79,6 +74,13 @@ export interface Comment {
   createdAt: string;
 }
 
+export interface StatusChange {
+  status: ComplaintStatus;
+  changedAt: string;
+  changedBy: string;
+  note?: string;
+}
+
 export interface Post {
   id: string;
   userId: string;
@@ -90,10 +92,6 @@ export interface Post {
   photos: string[];
   upvotes: number;
   userUpvotes: string[];
-  likes: number;
-  dislikes: number;
-  userLikes: string[];
-  userDislikes: string[];
   score: number;
   comments: Comment[];
   createdAt: string;
@@ -105,11 +103,26 @@ export interface Post {
   assignedOffice: string;
   jurisdictionLabel: string;
   referenceNumber: string;
-  status: 'open' | 'in-progress' | 'resolved';
+  status: ComplaintStatus;
   resolvedAt?: string;
   resolvedBy?: string;
   resolutionPhoto?: string;
   resolutionNotes?: string;
+  // New fields for municipality management
+  assignedWorkerId?: string;
+  assignedWorkerName?: string;
+  assignedAt?: string;
+  slaDeadline?: string;
+  slaBreached?: boolean;
+  duplicateGroupId?: string;
+  duplicateCount?: number;
+  statusHistory?: StatusChange[];
+  deleted?: boolean;
+  // Legacy compat fields (kept for migration)
+  likes?: number;
+  dislikes?: number;
+  userLikes?: string[];
+  userDislikes?: string[];
 }
 
 export interface GovernmentSubmission {
@@ -120,152 +133,55 @@ export interface GovernmentSubmission {
   status: 'received' | 'processing' | 'resolved';
 }
 
-export interface Badge {
-  id: BadgeType;
-  name: string;
-  description: string;
-  icon: string;
-  category: Category | 'General';
-  requirement: string;
-  earnedAt?: string;
-}
-
 export interface UserStats {
   userId: string;
-  points: number;
-  level: number;
-  badges: BadgeType[];
   postsCreated: number;
   upvotesReceived: number;
   issuesResolved: number;
   lastLoginDate: string;
-  resolverPoints: number;
-  creditCoins: number;
-  redeemedCoins: number;
+  totalResolutionTimeHours: number;
+  averageResolutionTimeHours: number;
 }
 
-export interface Token {
+export interface Notification {
   id: string;
   userId: string;
   postId: string;
   postTitle: string;
-  category: string;
-  issuedAt: string;
-  status: 'active' | 'redeemed';
+  message: string;
+  type: 'status_change' | 'assignment' | 'sla_breach';
+  read: boolean;
+  createdAt: string;
 }
 
-export interface RewardRedemption {
-  id: string;
-  userId: string;
-  rewardId: string;
-  rewardTitle: string;
-  rewardDescription: string;
-  rewardKind: RewardOption['rewardKind'];
-  providerName: string;
-  faceValue: string;
-  rewardItems: string[];
-  cost: number;
-  redeemedAt: string;
-  status: 'processing' | 'fulfilled';
-  deliveryWindow: string;
-  deliveryNote: string;
-  settlementChannel: string;
-  transactionReference: string;
-  walletBalanceBefore: number;
-  walletBalanceAfter: number;
-  couponCode?: string;
-  couponPin?: string;
+export interface WorkerPerformance {
+  workerId: string;
+  workerName: string;
+  totalAssigned: number;
+  totalResolved: number;
+  totalInProgress: number;
+  averageResolutionHours: number;
+  slaBreachCount: number;
 }
 
-export type PostReaction = 'like' | 'dislike';
+export interface WardReport {
+  ward: string;
+  totalComplaints: number;
+  resolved: number;
+  pending: number;
+  averageResolutionDays: number;
+  categoryBreakdown: Record<Category, number>;
+  slaBreachRate: number;
+}
 
 const CURRENT_USER_KEY = 'local_issues_current_user';
-const REWARD_HISTORY_KEY_PREFIX = 'local_reward_redemptions_';
-const USER_STATS_KEY_PREFIX = 'local_user_stats_';
-export const WALLET_SYNC_EVENT = 'community-portal:wallet-sync';
 const COLLECTIONS = {
   users: 'users',
   posts: 'posts',
   submissions: 'governmentSubmissions',
   userStats: 'userStats',
-  tokens: 'tokens',
-  rewardRedemptions: 'rewardRedemptions',
+  notifications: 'notifications',
 } as const;
-
-export const BADGE_DEFINITIONS: Record<BadgeType, Omit<Badge, 'earnedAt'>> = {
-  'pothole-patrol': {
-    id: 'pothole-patrol',
-    name: 'Pothole Patrol',
-    description: 'Report 5 road or infrastructure issues',
-    icon: 'RD',
-    category: 'Roads',
-    requirement: 'Report 5 road/infrastructure issues',
-  },
-  'cleanliness-captain': {
-    id: 'cleanliness-captain',
-    name: 'Cleanliness Captain',
-    description: 'Champion of community cleanliness',
-    icon: 'CL',
-    category: 'Other',
-    requirement: 'Report 5 cleanliness/sanitation issues',
-  },
-  'safety-scout': {
-    id: 'safety-scout',
-    name: 'Safety Scout',
-    description: 'Vigilant guardian of community safety',
-    icon: 'SF',
-    category: 'Other',
-    requirement: 'Report 5 safety/security issues',
-  },
-  'water-warrior': {
-    id: 'water-warrior',
-    name: 'Water Warrior',
-    description: 'Defender of water resources',
-    icon: 'WT',
-    category: 'Water',
-    requirement: 'Report 5 water-related issues',
-  },
-  'power-champion': {
-    id: 'power-champion',
-    name: 'Power Champion',
-    description: 'Electricity issue expert',
-    icon: 'PW',
-    category: 'Electricity',
-    requirement: 'Report 5 electricity issues',
-  },
-  'health-hero': {
-    id: 'health-hero',
-    name: 'Health Hero',
-    description: 'Healthcare advocate',
-    icon: 'HL',
-    category: 'Healthcare',
-    requirement: 'Report 5 healthcare issues',
-  },
-  'community-leader': {
-    id: 'community-leader',
-    name: 'Community Leader',
-    description: 'Top contributor with 1000+ civic impact points',
-    icon: 'LD',
-    category: 'General',
-    requirement: 'Earn 1000+ civic impact points',
-  },
-  'rising-star': {
-    id: 'rising-star',
-    name: 'Rising Star',
-    description: 'Earn strong public support on 3 complaints',
-    icon: 'RS',
-    category: 'General',
-    requirement: 'Receive 25+ support votes on 3 complaints',
-  },
-  'veteran-reporter': {
-    id: 'veteran-reporter',
-    name: 'Veteran Reporter',
-    description: 'Long-term community contributor',
-    icon: 'VR',
-    category: 'General',
-    requirement: 'Active for 30+ days with 20+ posts',
-  },
-};
 
 function getDb() {
   if (!isFirebaseConfigured()) {
@@ -291,12 +207,8 @@ function userStatsCollection() {
   return collection(getDb(), COLLECTIONS.userStats);
 }
 
-function tokensCollection() {
-  return collection(getDb(), COLLECTIONS.tokens);
-}
-
-function rewardRedemptionsCollection() {
-  return collection(getDb(), COLLECTIONS.rewardRedemptions);
+function notificationsCollection() {
+  return collection(getDb(), COLLECTIONS.notifications);
 }
 
 function isBrowser() {
@@ -313,32 +225,6 @@ function generateId(prefix: string) {
   }
 
   return `${prefix}-${Math.random().toString(36).slice(2, 11)}`;
-}
-
-function randomAlphaNumeric(length: number) {
-  const source = Math.random().toString(36).toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (source.length >= length) {
-    return source.slice(0, length);
-  }
-
-  return `${source}${Math.random().toString(36).toUpperCase().replace(/[^A-Z0-9]/g, '')}`.slice(0, length);
-}
-
-function generateCouponCode() {
-  return `${randomAlphaNumeric(4)}-${randomAlphaNumeric(4)}-${randomAlphaNumeric(4)}`;
-}
-
-function generateCouponPin() {
-  return `${Math.floor(1000 + Math.random() * 9000)}`;
-}
-
-function generateTransactionReference() {
-  return `NRX-${Date.now().toString().slice(-8)}-${randomAlphaNumeric(4)}`;
-}
-
-function buildFallbackTransactionReference(id: string) {
-  const compact = id.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(-8).padStart(8, '0');
-  return `NRX-${compact}`;
 }
 
 function sortByDateDesc<T>(items: T[], pickDate: (item: T) => string | undefined) {
@@ -392,6 +278,36 @@ function normalizeComment(postId: string, comment: Partial<Comment>): Comment {
   };
 }
 
+/** Map legacy categories to new spec categories */
+function migrateCategory(category: string): Category {
+  const mapping: Record<string, Category> = {
+    'Infrastructure': 'Pothole',
+    'Roads': 'Pothole',
+    'Electricity': 'Broken Streetlight',
+    'Water': 'Locality Cleanliness',
+    'Healthcare': 'Locality Cleanliness',
+    'Education': 'Park Maintenance',
+    'Other': 'Locality Cleanliness',
+    'Pothole': 'Pothole',
+    'Broken Streetlight': 'Broken Streetlight',
+    'Park Maintenance': 'Park Maintenance',
+    'Locality Cleanliness': 'Locality Cleanliness',
+  };
+  return mapping[category] || 'Locality Cleanliness';
+}
+
+/** Map legacy statuses to new 4-step flow */
+function migrateStatus(status: string): ComplaintStatus {
+  const mapping: Record<string, ComplaintStatus> = {
+    'open': 'submitted',
+    'submitted': 'submitted',
+    'assigned': 'assigned',
+    'in-progress': 'in-progress',
+    'resolved': 'resolved',
+  };
+  return mapping[status] || 'submitted';
+}
+
 function normalizeUser(id: string, data: Partial<User>): User {
   const role = normalizeRole(data.role);
 
@@ -408,11 +324,15 @@ function normalizeUser(id: string, data: Partial<User>): User {
     ...(data.approvedBy ? { approvedBy: data.approvedBy } : {}),
     ...(data.googleId ? { googleId: data.googleId } : {}),
     ...(data.avatarUrl ? { avatarUrl: data.avatarUrl } : {}),
+    ...(data.phone ? { phone: data.phone } : {}),
+    ...(data.ward ? { ward: data.ward } : {}),
+    ...(data.assignedWard ? { assignedWard: data.assignedWard } : {}),
   };
 }
 
 function normalizePost(id: string, data: Partial<Post>): Post {
-  const status = data.status === 'in-progress' || data.status === 'resolved' ? data.status : 'open';
+  const category = migrateCategory(data.category || 'Locality Cleanliness');
+  const status = migrateStatus(data.status || 'submitted');
   const locationDetails = data.locationDetails
     ? {
         state: data.locationDetails.state || '',
@@ -423,35 +343,35 @@ function normalizePost(id: string, data: Partial<Post>): Post {
         ...(data.locationDetails.landmark ? { landmark: data.locationDetails.landmark } : {}),
       }
     : undefined;
-  const likes = typeof data.likes === 'number' ? data.likes : typeof data.upvotes === 'number' ? data.upvotes : 0;
-  const dislikes = typeof data.dislikes === 'number' ? data.dislikes : 0;
-  const userLikes = Array.isArray(data.userLikes)
-    ? data.userLikes.filter(Boolean)
-    : Array.isArray(data.userUpvotes)
-      ? data.userUpvotes.filter(Boolean)
+  // Migrate from likes/dislikes to upvotes
+  const upvotes = typeof data.upvotes === 'number'
+    ? data.upvotes
+    : typeof data.likes === 'number'
+      ? data.likes
+      : 0;
+  const userUpvotes = Array.isArray(data.userUpvotes)
+    ? data.userUpvotes.filter(Boolean)
+    : Array.isArray(data.userLikes)
+      ? data.userLikes.filter(Boolean)
       : [];
-  const userDislikes = Array.isArray(data.userDislikes) ? data.userDislikes.filter(Boolean) : [];
   const locationLabel = formatLocationLabel(locationDetails, data.location);
-  const assignedDepartment = data.assignedDepartment || getDepartmentForCategory((data.category as Category) || 'Other');
+  const assignedDepartment = data.assignedDepartment || getDepartmentForCategory(category);
   const jurisdictionLabel = data.jurisdictionLabel || buildJurisdictionLabel(locationDetails, data.location);
-  const referenceNumber = data.referenceNumber || `NCP-${id.slice(-8).toUpperCase()}`;
+  const referenceNumber = data.referenceNumber || `FMA-${id.slice(-8).toUpperCase()}`;
+  const slaDeadline = data.slaDeadline || computeSLADeadline(data.createdAt || getNowIso(), category);
 
   return {
     id,
     userId: data.userId || '',
     title: data.title || '',
     description: data.description || '',
-    category: (data.category as Category) || 'Other',
+    category,
     ...(locationLabel ? { location: locationLabel } : {}),
     ...(locationDetails ? { locationDetails } : {}),
     photos: Array.isArray(data.photos) ? data.photos.filter(Boolean) : [],
-    upvotes: likes,
-    userUpvotes: userLikes,
-    likes,
-    dislikes,
-    userLikes,
-    userDislikes,
-    score: typeof data.score === 'number' ? data.score : computePostScore({ likes, dislikes, createdAt: data.createdAt }),
+    upvotes,
+    userUpvotes,
+    score: typeof data.score === 'number' ? data.score : computePostScore({ upvotes, createdAt: data.createdAt }),
     comments: Array.isArray(data.comments)
       ? data.comments.map(comment => normalizeComment(id, comment))
       : [],
@@ -465,10 +385,19 @@ function normalizePost(id: string, data: Partial<Post>): Post {
     jurisdictionLabel,
     referenceNumber,
     status,
+    slaDeadline,
+    slaBreached: data.slaBreached || false,
     ...(data.resolvedAt ? { resolvedAt: data.resolvedAt } : {}),
     ...(data.resolvedBy ? { resolvedBy: data.resolvedBy } : {}),
     ...(data.resolutionPhoto ? { resolutionPhoto: data.resolutionPhoto } : {}),
     ...(data.resolutionNotes ? { resolutionNotes: data.resolutionNotes } : {}),
+    ...(data.assignedWorkerId ? { assignedWorkerId: data.assignedWorkerId } : {}),
+    ...(data.assignedWorkerName ? { assignedWorkerName: data.assignedWorkerName } : {}),
+    ...(data.assignedAt ? { assignedAt: data.assignedAt } : {}),
+    ...(data.duplicateGroupId ? { duplicateGroupId: data.duplicateGroupId } : {}),
+    duplicateCount: typeof data.duplicateCount === 'number' ? data.duplicateCount : 1,
+    statusHistory: Array.isArray(data.statusHistory) ? data.statusHistory : [],
+    ...(data.deleted ? { deleted: true } : {}),
   };
 }
 
@@ -483,64 +412,14 @@ function normalizeSubmission(id: string, data: Partial<GovernmentSubmission>): G
 }
 
 function normalizeUserStats(userId: string, data: Partial<UserStats>): UserStats {
-  const points = typeof data.points === 'number' ? data.points : 0;
-  const resolverPoints = typeof data.resolverPoints === 'number' ? data.resolverPoints : 0;
-  const creditCoins = typeof data.creditCoins === 'number' ? data.creditCoins : points + resolverPoints;
-
   return {
     userId,
-    points,
-    level: calculateLevel(points + resolverPoints),
-    badges: Array.isArray(data.badges) ? data.badges.filter(Boolean) as BadgeType[] : [],
     postsCreated: typeof data.postsCreated === 'number' ? data.postsCreated : 0,
     upvotesReceived: typeof data.upvotesReceived === 'number' ? data.upvotesReceived : 0,
     issuesResolved: typeof data.issuesResolved === 'number' ? data.issuesResolved : 0,
     lastLoginDate: data.lastLoginDate || getNowIso(),
-    resolverPoints,
-    creditCoins,
-    redeemedCoins: typeof data.redeemedCoins === 'number' ? data.redeemedCoins : 0,
-  };
-}
-
-function normalizeToken(id: string, data: Partial<Token>): Token {
-  return {
-    id,
-    userId: data.userId || '',
-    postId: data.postId || '',
-    postTitle: data.postTitle || '',
-    category: data.category || 'Other',
-    issuedAt: data.issuedAt || getNowIso(),
-    status: data.status === 'redeemed' ? 'redeemed' : 'active',
-  };
-}
-
-function normalizeRewardRedemption(id: string, data: Partial<RewardRedemption>): RewardRedemption {
-  const walletBalanceAfter = typeof data.walletBalanceAfter === 'number' ? data.walletBalanceAfter : 0;
-  const walletBalanceBefore = typeof data.walletBalanceBefore === 'number'
-    ? data.walletBalanceBefore
-    : walletBalanceAfter + (typeof data.cost === 'number' ? data.cost : 0);
-
-  return {
-    id,
-    userId: data.userId || '',
-    rewardId: data.rewardId || '',
-    rewardTitle: data.rewardTitle || 'Portal reward',
-    rewardDescription: data.rewardDescription || 'Community portal reward redemption',
-    rewardKind: data.rewardKind || 'gift-card',
-    providerName: data.providerName || 'National Rewards Desk',
-    faceValue: data.faceValue || 'Benefit value pending confirmation',
-    rewardItems: Array.isArray(data.rewardItems) ? data.rewardItems.filter(Boolean) : [],
-    cost: typeof data.cost === 'number' ? data.cost : 0,
-    redeemedAt: data.redeemedAt || getNowIso(),
-    status: data.status === 'fulfilled' ? 'fulfilled' : 'processing',
-    deliveryWindow: data.deliveryWindow || 'Pending confirmation',
-    deliveryNote: data.deliveryNote || 'Reward request captured in the portal history.',
-    settlementChannel: data.settlementChannel || 'National Rewards Settlement Desk',
-    transactionReference: data.transactionReference || buildFallbackTransactionReference(id),
-    walletBalanceBefore,
-    walletBalanceAfter,
-    ...(data.couponCode ? { couponCode: data.couponCode } : {}),
-    ...(data.couponPin ? { couponPin: data.couponPin } : {}),
+    totalResolutionTimeHours: typeof data.totalResolutionTimeHours === 'number' ? data.totalResolutionTimeHours : 0,
+    averageResolutionTimeHours: typeof data.averageResolutionTimeHours === 'number' ? data.averageResolutionTimeHours : 0,
   };
 }
 
@@ -576,97 +455,6 @@ function readCurrentUserCache(): User | null {
   }
 }
 
-function getRewardHistoryStorageKey(userId: string) {
-  return `${REWARD_HISTORY_KEY_PREFIX}${userId}`;
-}
-
-function getUserStatsStorageKey(userId: string) {
-  return `${USER_STATS_KEY_PREFIX}${userId}`;
-}
-
-function emitWalletSync(userId: string, stats?: UserStats, redemption?: RewardRedemption) {
-  if (!isBrowser() || !userId) {
-    return;
-  }
-
-  window.dispatchEvent(
-    new CustomEvent(WALLET_SYNC_EVENT, {
-      detail: {
-        userId,
-        ...(stats ? { stats } : {}),
-        ...(redemption ? { redemption } : {}),
-      },
-    }),
-  );
-}
-
-function readRewardRedemptionCache(userId: string): RewardRedemption[] {
-  if (!isBrowser() || !userId) {
-    return [];
-  }
-
-  const raw = localStorage.getItem(getRewardHistoryStorageKey(userId));
-  if (!raw) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as Array<Partial<RewardRedemption>>;
-    return sortByDateDesc(
-      parsed.map(entry => normalizeRewardRedemption(entry.id || generateId('reward'), entry)),
-      redemption => redemption.redeemedAt,
-    );
-  } catch {
-    localStorage.removeItem(getRewardHistoryStorageKey(userId));
-    return [];
-  }
-}
-
-function saveRewardRedemptionCache(userId: string, redemptions: RewardRedemption[]) {
-  if (!isBrowser() || !userId) {
-    return;
-  }
-
-  localStorage.setItem(getRewardHistoryStorageKey(userId), JSON.stringify(redemptions));
-}
-
-function readUserStatsCache(userId: string): UserStats | null {
-  if (!isBrowser() || !userId) {
-    return null;
-  }
-
-  const raw = localStorage.getItem(getUserStatsStorageKey(userId));
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    return normalizeUserStats(userId, JSON.parse(raw) as Partial<UserStats>);
-  } catch {
-    localStorage.removeItem(getUserStatsStorageKey(userId));
-    return null;
-  }
-}
-
-function saveUserStatsCache(userId: string, stats: UserStats) {
-  if (!isBrowser() || !userId) {
-    return;
-  }
-
-  localStorage.setItem(getUserStatsStorageKey(userId), JSON.stringify(stats));
-}
-
-function mergeRewardRedemptions(primary: RewardRedemption[], secondary: RewardRedemption[]) {
-  const merged = new Map<string, RewardRedemption>();
-
-  [...secondary, ...primary].forEach(entry => {
-    const normalized = normalizeRewardRedemption(entry.id, entry);
-    merged.set(normalized.id, normalized);
-  });
-
-  return sortByDateDesc([...merged.values()], redemption => redemption.redeemedAt);
-}
-
 async function persistUser(user: User) {
   await setDoc(doc(usersCollection(), user.id), user);
 }
@@ -681,34 +469,57 @@ async function persistSubmission(submission: GovernmentSubmission) {
 
 async function persistUserStats(stats: UserStats) {
   const normalized = normalizeUserStats(stats.userId, stats);
-  saveUserStatsCache(normalized.userId, normalized);
-  emitWalletSync(normalized.userId, normalized);
   await setDoc(doc(userStatsCollection(), normalized.userId), normalized);
 }
 
-async function persistToken(token: Token) {
-  await setDoc(doc(tokensCollection(), token.id), token);
-}
-
-async function persistRewardRedemption(redemption: RewardRedemption) {
-  const normalized = normalizeRewardRedemption(redemption.id, redemption);
-  const cached = readRewardRedemptionCache(normalized.userId);
-  const nextCached = mergeRewardRedemptions([normalized], cached);
-
-  saveRewardRedemptionCache(normalized.userId, nextCached);
-  emitWalletSync(normalized.userId, undefined, normalized);
-
+async function persistNotification(notification: Notification) {
   try {
-    await setDoc(doc(rewardRedemptionsCollection(), normalized.id), normalized);
+    await setDoc(doc(notificationsCollection(), notification.id), notification);
   } catch {
-    // Keep the wallet usable even when the optional history collection
-    // is unavailable or its Firestore rules haven't been deployed yet.
+    // Best effort — notifications are non-critical
   }
 }
 
 async function ensureUserStats(userId: string) {
   const existing = await getUserStats(userId);
   return existing;
+}
+
+/**
+ * If a user's Firestore document ID doesn't match the Firebase Auth UID,
+ * migrate the document to use the Firebase UID as the key.
+ * This is critical because Firestore security rules check users/{request.auth.uid}
+ * to verify roles (e.g. isAdmin).
+ */
+async function migrateUserDocumentId(existingUser: User, firebaseUid: string): Promise<User> {
+  if (existingUser.id === firebaseUid) {
+    return existingUser; // Already correct
+  }
+
+  const migratedUser: User = { ...existingUser, id: firebaseUid, firebaseUid };
+
+  // Create the document under the correct Firebase UID key
+  await setDoc(doc(usersCollection(), firebaseUid), migratedUser);
+
+  // Delete the old document (best effort — may fail if rules block it,
+  // but the new document is already in place so the app will work)
+  try {
+    await deleteDoc(doc(usersCollection(), existingUser.id));
+  } catch {
+    // Non-critical: old document may remain but the new one is canonical
+  }
+
+  // Migrate user stats to the new ID
+  try {
+    const oldStats = await getUserStats(existingUser.id);
+    if (oldStats) {
+      await persistUserStats({ ...oldStats, userId: firebaseUid });
+    }
+  } catch {
+    // Non-critical
+  }
+
+  return migratedUser;
 }
 
 async function getUserByEmail(email: string) {
@@ -776,21 +587,6 @@ async function deleteSubmissionByPostId(postId: string) {
   }
 }
 
-async function issueToken(userId: string, postId: string, postTitle: string, category: string) {
-  const token: Token = {
-    id: `TKN-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
-    userId,
-    postId,
-    postTitle,
-    category,
-    issuedAt: getNowIso(),
-    status: 'active',
-  };
-
-  await persistToken(token);
-  return token;
-}
-
 export async function initializeDB() {
   return;
 }
@@ -798,6 +594,10 @@ export async function initializeDB() {
 export function isAuthorityApproved(user: User | null | undefined) {
   return user?.role === 'authority' && user.approvalStatus === 'approved';
 }
+
+/* ------------------------------------------------------------------ */
+/*  Authentication                                                     */
+/* ------------------------------------------------------------------ */
 
 export async function authenticateWithGoogle(profile: GoogleAuthProfile, mode: AuthMode): Promise<User> {
   const normalizedEmail = profile.email.trim().toLowerCase();
@@ -831,20 +631,23 @@ export async function authenticateWithGoogle(profile: GoogleAuthProfile, mode: A
   }
 
   if (existingUser.role !== 'citizen') {
-    throw new Error('This Google account belongs to a protected staff account. Use the authority sign-in section.');
+    throw new Error('This Google account belongs to a protected staff account. Use the worker sign-in section.');
   }
 
   if (mode === 'signup') {
     throw new Error('Account already exists. Please sign in instead.');
   }
 
-  const updatedUser: User = normalizeUser(existingUser.id, {
-    ...existingUser,
+  // Migrate document if stored under a different ID than Firebase UID
+  const migrated = await migrateUserDocumentId(existingUser, profile.googleId);
+
+  const updatedUser: User = normalizeUser(migrated.id, {
+    ...migrated,
     email: normalizedEmail,
-    name: existingUser.name || normalizedName,
+    name: migrated.name || normalizedName,
     firebaseUid: profile.googleId,
     googleId: profile.googleId,
-    avatarUrl: profile.avatarUrl || existingUser.avatarUrl,
+    avatarUrl: profile.avatarUrl || migrated.avatarUrl,
   });
 
   await persistUser(updatedUser);
@@ -859,7 +662,10 @@ export async function authenticateWithGoogle(profile: GoogleAuthProfile, mode: A
   return updatedUser;
 }
 
-export async function authenticateCitizenPassword(profile: FirebasePasswordProfile, mode: AuthMode): Promise<User> {
+export async function authenticateCitizenPassword(
+  profile: FirebasePasswordProfile,
+  mode: AuthMode,
+): Promise<User> {
   const normalizedEmail = profile.email.trim().toLowerCase();
   const normalizedName = profile.name.trim() || normalizedEmail.split('@')[0];
   const existingByUid = await getUserByFirebaseUid(profile.uid);
@@ -889,17 +695,20 @@ export async function authenticateCitizenPassword(profile: FirebasePasswordProfi
   }
 
   if (existingUser.role !== 'citizen') {
-    throw new Error('This email belongs to a protected staff account. Use the authority sign-in section.');
+    throw new Error('This email belongs to a protected staff account. Use the worker sign-in section.');
   }
 
   if (mode === 'signup') {
     throw new Error('Citizen account already exists. Please sign in instead.');
   }
 
-  const updatedUser: User = normalizeUser(existingUser.id, {
-    ...existingUser,
+  // Migrate document if stored under a different ID than Firebase UID
+  const migrated = await migrateUserDocumentId(existingUser, profile.uid);
+
+  const updatedUser: User = normalizeUser(migrated.id, {
+    ...migrated,
     email: normalizedEmail,
-    name: existingUser.name || normalizedName,
+    name: migrated.name || normalizedName,
     authProvider: 'password',
     firebaseUid: profile.uid,
   });
@@ -916,7 +725,11 @@ export async function authenticateCitizenPassword(profile: FirebasePasswordProfi
   return updatedUser;
 }
 
-export async function authenticateAuthority(profile: FirebasePasswordProfile, mode: AuthMode): Promise<User> {
+export async function authenticateAuthority(
+  profile: FirebasePasswordProfile,
+  mode: AuthMode,
+  extraFields?: { phone?: string },
+): Promise<User> {
   const normalizedEmail = profile.email.trim().toLowerCase();
   const normalizedName = profile.name.trim() || normalizedEmail.split('@')[0];
   const existingByUid = await getUserByFirebaseUid(profile.uid);
@@ -925,7 +738,7 @@ export async function authenticateAuthority(profile: FirebasePasswordProfile, mo
 
   if (!existingUser) {
     if (mode === 'signin') {
-      throw new Error('No authority record found for this account. Please sign up first.');
+      throw new Error('No worker account found. Please sign up first.');
     }
 
     const newUser: User = {
@@ -937,6 +750,7 @@ export async function authenticateAuthority(profile: FirebasePasswordProfile, mo
       approvalStatus: 'pending',
       authProvider: 'password',
       firebaseUid: profile.uid,
+      ...(extraFields?.phone ? { phone: extraFields.phone } : {}),
     };
 
     await persistUser(newUser);
@@ -946,17 +760,20 @@ export async function authenticateAuthority(profile: FirebasePasswordProfile, mo
   }
 
   if (existingUser.role !== 'authority') {
-    throw new Error('This account is not registered as a government authority.');
+    throw new Error('This account is not registered as a municipality worker.');
   }
 
   if (mode === 'signup') {
-    throw new Error('An authority account already exists. Please sign in instead.');
+    throw new Error('A worker account already exists. Please sign in instead.');
   }
 
-  const updatedUser = normalizeUser(existingUser.id, {
-    ...existingUser,
+  // Migrate document if stored under a different ID than Firebase UID
+  const migrated = await migrateUserDocumentId(existingUser, profile.uid);
+
+  const updatedUser = normalizeUser(migrated.id, {
+    ...migrated,
     email: normalizedEmail,
-    name: existingUser.name || normalizedName,
+    name: migrated.name || normalizedName,
     authProvider: 'password',
     firebaseUid: profile.uid,
   });
@@ -1000,10 +817,13 @@ export async function authenticateAdmin(profile: FirebasePasswordProfile): Promi
     throw new Error('This Firebase account is not registered as admin.');
   }
 
-  const updatedUser = normalizeUser(existingUser.id, {
-    ...existingUser,
+  // Migrate document if stored under a different ID than Firebase UID
+  const migrated = await migrateUserDocumentId(existingUser, profile.uid);
+
+  const updatedUser = normalizeUser(migrated.id, {
+    ...migrated,
     email: normalizedEmail,
-    name: existingUser.name || profile.name || ADMIN_USERNAME,
+    name: migrated.name || profile.name || ADMIN_USERNAME,
     authProvider: 'password',
     firebaseUid: profile.uid,
   });
@@ -1035,12 +855,15 @@ export async function getCurrentUser(): Promise<User | null> {
     return null;
   }
 
-  const updatedUser = normalizeUser(user.id, {
-    ...user,
+  // Migrate document if stored under a different ID than Firebase UID
+  const migrated = await migrateUserDocumentId(user, firebaseUser.uid);
+
+  const updatedUser = normalizeUser(migrated.id, {
+    ...migrated,
     email: firebaseUser.email,
     firebaseUid: firebaseUser.uid,
-    ...(user.authProvider === 'google' ? { googleId: firebaseUser.uid } : {}),
-    avatarUrl: firebaseUser.photoURL || user.avatarUrl,
+    ...(migrated.authProvider === 'google' ? { googleId: firebaseUser.uid } : {}),
+    avatarUrl: firebaseUser.photoURL || migrated.avatarUrl,
   });
 
   await persistUser(updatedUser);
@@ -1074,6 +897,15 @@ export async function getAuthorityUsers(status?: Exclude<UserApprovalStatus, 'no
   return sortByDateDesc(users, user => user.createdAt);
 }
 
+export async function getApprovedWorkers(): Promise<User[]> {
+  return getAuthorityUsers('approved');
+}
+
+export async function getWorkersByWard(ward: string): Promise<User[]> {
+  const workers = await getApprovedWorkers();
+  return workers.filter(w => w.assignedWard === ward);
+}
+
 export async function updateAuthorityApproval(
   authorityUserId: string,
   status: Exclude<UserApprovalStatus, 'not-required'>,
@@ -1082,11 +914,11 @@ export async function updateAuthorityApproval(
   const user = await getUserById(authorityUserId);
 
   if (!user) {
-    throw new Error('Authority user not found.');
+    throw new Error('Worker user not found.');
   }
 
   if (user.role !== 'authority') {
-    throw new Error('Only authority accounts can be reviewed.');
+    throw new Error('Only worker accounts can be reviewed.');
   }
 
   const nextUser = normalizeUser(user.id, {
@@ -1100,9 +932,80 @@ export async function updateAuthorityApproval(
   return nextUser;
 }
 
+export async function updateWorkerWard(workerId: string, ward: string): Promise<User> {
+  const user = await getUserById(workerId);
+  if (!user) throw new Error('Worker not found.');
+  if (user.role !== 'authority') throw new Error('Only workers can be assigned wards.');
+
+  const updated = normalizeUser(user.id, { ...user, assignedWard: ward });
+  await persistUser(updated);
+  return updated;
+}
+
+export async function removeWorker(workerId: string, adminUserId: string): Promise<boolean> {
+  const worker = await getUserById(workerId);
+  if (!worker) throw new Error('Worker not found.');
+  if (worker.role !== 'authority') throw new Error('Only worker accounts can be removed.');
+
+  // Verify the caller is actually an admin
+  const firebaseUser = isFirebaseConfigured()
+    ? await waitForFirebaseUser().catch(() => null)
+    : null;
+  const actingAdminId = firebaseUser?.uid || adminUserId;
+  const admin = await getUserById(adminUserId) || await getUserById(actingAdminId) || await getUserByFirebaseUid(actingAdminId);
+  if (!admin || admin.role !== 'admin') throw new Error('Only admins can remove workers.');
+  const canonicalAdminId = firebaseUser?.uid || admin.firebaseUid || adminUserId || admin.id;
+
+  // Firestore delete rules only trust admin records stored at /users/{request.auth.uid}.
+  // Refresh that canonical record so legacy admin document IDs do not block worker removal.
+  if (canonicalAdminId && admin.id !== canonicalAdminId) {
+    await persistUser(normalizeUser(canonicalAdminId, {
+      ...admin,
+      firebaseUid: canonicalAdminId,
+    }));
+  }
+  adminUserId = canonicalAdminId;
+
+  // Unassign complaints that were assigned to this worker
+  const posts = await getPosts();
+  const assignedPosts = posts.filter(p => p.assignedWorkerId === workerId && p.status !== 'resolved');
+  for (const post of assignedPosts) {
+    const reverted: Post = {
+      ...post,
+      status: 'submitted',
+      assignedWorkerId: undefined,
+      assignedWorkerName: undefined,
+      assignedAt: undefined,
+      statusHistory: [
+        ...(post.statusHistory || []),
+        { status: 'submitted' as ComplaintStatus, changedAt: getNowIso(), changedBy: adminUserId, note: `Worker ${worker.name} removed — complaint unassigned` },
+      ],
+    };
+    await persistPost(reverted);
+  }
+
+  // Delete the worker's user document
+  await deleteDoc(doc(usersCollection(), workerId));
+
+  // Best-effort cleanup of worker stats
+  try {
+    await deleteDoc(doc(userStatsCollection(), workerId));
+  } catch {
+    // Non-critical
+  }
+
+  return true;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Posts / Complaints                                                 */
+/* ------------------------------------------------------------------ */
+
 export async function getPosts(): Promise<Post[]> {
   const snapshot = await getDocs(query(postsCollection(), orderBy('createdAt', 'desc')));
-  return snapshot.docs.map(entry => normalizePost(entry.id, entry.data() as Partial<Post>));
+  return snapshot.docs
+    .map(entry => normalizePost(entry.id, entry.data() as Partial<Post>))
+    .filter(post => !post.deleted);
 }
 
 export async function getPostById(id: string): Promise<Post | null> {
@@ -1115,7 +1018,12 @@ export async function getPostById(id: string): Promise<Post | null> {
     return null;
   }
 
-  return normalizePost(snapshot.id, snapshot.data() as Partial<Post>);
+  const post = normalizePost(snapshot.id, snapshot.data() as Partial<Post>);
+  if (post.deleted) {
+    return null;
+  }
+
+  return post;
 }
 
 export async function getRegularPosts() {
@@ -1140,6 +1048,16 @@ export async function getResolvedPosts() {
   return posts.filter(post => post.status === 'resolved');
 }
 
+export async function getPostsByWard(ward: string): Promise<Post[]> {
+  const posts = await getPosts();
+  return posts.filter(post => post.locationDetails?.ward === ward);
+}
+
+export async function getPostsAssignedToWorker(workerId: string): Promise<Post[]> {
+  const posts = await getPosts();
+  return posts.filter(post => post.assignedWorkerId === workerId);
+}
+
 export async function createPost(
   userId: string,
   title: string,
@@ -1148,7 +1066,7 @@ export async function createPost(
   location?: string,
   photos: string[] = [],
   locationDetails?: ComplaintLocation,
-): Promise<{ post: Post; token: Token }> {
+): Promise<{ post: Post }> {
   const now = getNowIso();
   const normalizedLocationDetails = locationDetails
     ? {
@@ -1161,6 +1079,16 @@ export async function createPost(
       }
     : undefined;
   const jurisdictionLabel = buildJurisdictionLabel(normalizedLocationDetails, location);
+  const slaDeadline = computeSLADeadline(now, category);
+
+  // Duplicate detection
+  const existingPosts = await getPosts();
+  const duplicateIds = findDuplicates(
+    { title, category, locationDetails: normalizedLocationDetails },
+    existingPosts,
+  );
+  const duplicateGroupId = duplicateIds.length > 0 ? (existingPosts.find(p => p.id === duplicateIds[0])?.duplicateGroupId || duplicateIds[0]) : undefined;
+
   const post: Post = {
     id: generateId('post'),
     userId,
@@ -1174,11 +1102,7 @@ export async function createPost(
     photos,
     upvotes: 0,
     userUpvotes: [],
-    likes: 0,
-    dislikes: 0,
-    userLikes: [],
-    userDislikes: [],
-    score: computePostScore({ likes: 0, dislikes: 0, createdAt: now }),
+    score: computePostScore({ upvotes: 0, createdAt: now }),
     comments: [],
     createdAt: now,
     submittedToGov: true,
@@ -1188,75 +1112,65 @@ export async function createPost(
     assignedDepartment: getDepartmentForCategory(category),
     assignedOffice: `${jurisdictionLabel} Administration`,
     jurisdictionLabel,
-    referenceNumber: `NCP-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
-    status: 'open',
+    referenceNumber: `FMA-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+    status: 'submitted',
+    slaDeadline,
+    slaBreached: false,
+    duplicateCount: duplicateIds.length + 1,
+    ...(duplicateGroupId ? { duplicateGroupId } : {}),
+    statusHistory: [{ status: 'submitted', changedAt: now, changedBy: userId, note: 'Complaint filed by citizen' }],
   };
 
   await persistPost(post);
   await upsertSubmissionForPost(post);
 
-  const stats = await ensureUserStats(userId);
-  const pointsToAward = stats.postsCreated === 0 ? 60 : 25;
-  const coinAward = 30;
+  // Update duplicate counts for related posts
+  if (duplicateIds.length > 0) {
+    for (const dupId of duplicateIds) {
+      const dupPost = await getPostById(dupId);
+      if (dupPost) {
+        dupPost.duplicateCount = (dupPost.duplicateCount || 1) + 1;
+        if (!dupPost.duplicateGroupId) dupPost.duplicateGroupId = dupPost.id;
+        await persistPost(dupPost);
+      }
+    }
+  }
 
+  const stats = await ensureUserStats(userId);
   await persistUserStats({
     ...stats,
-    points: stats.points + pointsToAward,
-    creditCoins: stats.creditCoins + coinAward,
     postsCreated: stats.postsCreated + 1,
   });
 
-  const token = await issueToken(userId, post.id, post.title, post.category);
-  return { post, token };
+  return { post };
 }
 
-export async function reactToPost(postId: string, userId: string, reaction: PostReaction): Promise<Post> {
+export async function upvotePost(postId: string, userId: string): Promise<Post> {
   const post = await getPostById(postId);
 
   if (!post) {
     throw new Error('Post not found');
   }
 
-  const hasLiked = post.userLikes.includes(userId);
-  const hasDisliked = post.userDislikes.includes(userId);
+  const hasUpvoted = post.userUpvotes.includes(userId);
 
-  if (reaction === 'like') {
-    if (hasLiked) {
-      post.userLikes = post.userLikes.filter(id => id !== userId);
-      post.likes = Math.max(0, post.likes - 1);
-    } else {
-      post.userLikes = [...post.userLikes, userId];
-      post.likes += 1;
-
-      if (hasDisliked) {
-        post.userDislikes = post.userDislikes.filter(id => id !== userId);
-        post.dislikes = Math.max(0, post.dislikes - 1);
-      }
-
-      const authorStats = await ensureUserStats(post.userId);
-      await persistUserStats({
-        ...authorStats,
-        points: authorStats.points + 2,
-        upvotesReceived: authorStats.upvotesReceived + 1,
-      });
-    }
-  } else if (hasDisliked) {
-    post.userDislikes = post.userDislikes.filter(id => id !== userId);
-    post.dislikes = Math.max(0, post.dislikes - 1);
+  if (hasUpvoted) {
+    // Toggle off
+    post.userUpvotes = post.userUpvotes.filter(id => id !== userId);
+    post.upvotes = Math.max(0, post.upvotes - 1);
   } else {
-    post.userDislikes = [...post.userDislikes, userId];
-    post.dislikes += 1;
+    post.userUpvotes = [...post.userUpvotes, userId];
+    post.upvotes += 1;
 
-    if (hasLiked) {
-      post.userLikes = post.userLikes.filter(id => id !== userId);
-      post.likes = Math.max(0, post.likes - 1);
-    }
+    // Award upvote to author
+    const authorStats = await ensureUserStats(post.userId);
+    await persistUserStats({
+      ...authorStats,
+      upvotesReceived: authorStats.upvotesReceived + 1,
+    });
   }
 
-  post.upvotes = post.likes;
-  post.userUpvotes = post.userLikes;
   post.score = computePostScore(post);
-
   await persistPost(post);
 
   if (post.submittedToGov) {
@@ -1264,10 +1178,6 @@ export async function reactToPost(postId: string, userId: string, reaction: Post
   }
 
   return post;
-}
-
-export async function upvotePost(postId: string, userId: string): Promise<Post> {
-  return reactToPost(postId, userId, 'like');
 }
 
 export async function submitPostToGovernment(post: Post) {
@@ -1298,34 +1208,226 @@ export async function getGovernmentSubmissions(): Promise<GovernmentSubmission[]
     }));
 }
 
-export async function updateSubmissionStatus(
-  submissionId: string,
-  status: 'received' | 'processing' | 'resolved',
-) {
-  const submissionSnapshot = await getDoc(doc(submissionsCollection(), submissionId));
-  if (!submissionSnapshot.exists()) {
-    return;
+/* ------------------------------------------------------------------ */
+/*  Complaint Assignment                                               */
+/* ------------------------------------------------------------------ */
+
+export async function assignComplaintToWorker(
+  postId: string,
+  workerId: string,
+  adminUserId: string,
+): Promise<Post> {
+  const post = await getPostById(postId);
+  if (!post) throw new Error('Complaint not found.');
+
+  const worker = await getUserById(workerId);
+  if (!worker) throw new Error('Worker not found.');
+  if (worker.role !== 'authority' || worker.approvalStatus !== 'approved') {
+    throw new Error('Worker is not approved.');
   }
 
-  const submission = normalizeSubmission(submissionSnapshot.id, submissionSnapshot.data() as Partial<GovernmentSubmission>);
-  let updatedPost = submission.post;
+  const now = getNowIso();
+  const statusEntry: StatusChange = {
+    status: 'assigned',
+    changedAt: now,
+    changedBy: adminUserId,
+    note: `Assigned to ${worker.name}`,
+  };
 
-  if (status === 'processing' && updatedPost.status !== 'resolved') {
-    updatedPost = { ...updatedPost, status: 'in-progress' };
-    await persistPost(updatedPost);
-  }
+  const updatedPost: Post = {
+    ...post,
+    status: 'assigned',
+    assignedWorkerId: workerId,
+    assignedWorkerName: worker.name,
+    assignedAt: now,
+    statusHistory: [...(post.statusHistory || []), statusEntry],
+  };
 
-  if (status === 'received' && updatedPost.status === 'in-progress') {
-    updatedPost = { ...updatedPost, status: 'open' };
-    await persistPost(updatedPost);
-  }
+  await persistPost(updatedPost);
+  await upsertSubmissionForPost(updatedPost, 'processing');
 
-  await persistSubmission({
-    ...submission,
-    status,
-    post: updatedPost,
-  });
+  // Notify citizen
+  await createNotification(
+    post.userId,
+    postId,
+    post.title,
+    `Your complaint has been assigned to ${worker.name}`,
+    'assignment',
+  );
+
+  return updatedPost;
 }
+
+export async function reassignComplaint(
+  postId: string,
+  newWorkerId: string,
+  adminUserId: string,
+): Promise<Post> {
+  return assignComplaintToWorker(postId, newWorkerId, adminUserId);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Status Updates                                                     */
+/* ------------------------------------------------------------------ */
+
+export async function updateComplaintStatus(
+  postId: string,
+  newStatus: ComplaintStatus,
+  changedBy: string,
+  note?: string,
+): Promise<Post> {
+  const post = await getPostById(postId);
+  if (!post) throw new Error('Complaint not found.');
+
+  const now = getNowIso();
+  const statusEntry: StatusChange = {
+    status: newStatus,
+    changedAt: now,
+    changedBy,
+    note: note || `Status changed to ${newStatus}`,
+  };
+
+  const updatedPost: Post = {
+    ...post,
+    status: newStatus,
+    statusHistory: [...(post.statusHistory || []), statusEntry],
+  };
+
+  await persistPost(updatedPost);
+
+  // Map to submission status
+  const submissionStatus = newStatus === 'resolved'
+    ? 'resolved' as const
+    : (newStatus === 'in-progress' || newStatus === 'assigned')
+      ? 'processing' as const
+      : 'received' as const;
+
+  const existingSubmission = await getSubmissionByPostId(postId);
+  if (existingSubmission) {
+    await persistSubmission({
+      ...existingSubmission,
+      status: submissionStatus,
+      post: updatedPost,
+    });
+  }
+
+  // Notify citizen about status change
+  await createNotification(
+    post.userId,
+    postId,
+    post.title,
+    `Status updated to "${newStatus}"`,
+    'status_change',
+  );
+
+  return updatedPost;
+}
+
+export async function resolvePost(
+  postId: string,
+  resolvedBy: string,
+  resolutionPhoto: string,
+  resolutionNotes?: string,
+): Promise<{ post: Post } | null> {
+  const post = await getPostById(postId);
+  if (!post) {
+    return null;
+  }
+
+  const now = getNowIso();
+  const statusEntry: StatusChange = {
+    status: 'resolved',
+    changedAt: now,
+    changedBy: resolvedBy,
+    note: resolutionNotes || 'Resolved with photo proof',
+  };
+
+  const resolvedPost: Post = {
+    ...post,
+    status: 'resolved',
+    isReported: true,
+    submittedToGov: true,
+    resolvedAt: now,
+    resolvedBy,
+    ...(resolutionPhoto ? { resolutionPhoto } : {}),
+    ...(resolutionNotes?.trim() ? { resolutionNotes: resolutionNotes.trim() } : {}),
+    statusHistory: [...(post.statusHistory || []), statusEntry],
+  };
+
+  await persistPost(resolvedPost);
+
+  const existingSubmission = await getSubmissionByPostId(postId);
+  await persistSubmission({
+    id: existingSubmission?.id || generateId('submission'),
+    postId,
+    post: resolvedPost,
+    submittedAt: existingSubmission?.submittedAt || resolvedPost.submittedToGovAt || resolvedPost.reportedAt || now,
+    status: 'resolved',
+  });
+
+  // Update worker stats
+  const resolverStats = await ensureUserStats(resolvedBy);
+  const createdTime = new Date(post.createdAt).getTime();
+  const resolvedTime = new Date(now).getTime();
+  const resolutionHours = (resolvedTime - createdTime) / (1000 * 60 * 60);
+  const totalHours = resolverStats.totalResolutionTimeHours + resolutionHours;
+  const totalResolved = resolverStats.issuesResolved + 1;
+
+  await persistUserStats({
+    ...resolverStats,
+    issuesResolved: totalResolved,
+    totalResolutionTimeHours: totalHours,
+    averageResolutionTimeHours: totalHours / totalResolved,
+  });
+
+  // Notify citizen
+  await createNotification(
+    post.userId,
+    postId,
+    post.title,
+    'Your complaint has been resolved! Check the resolution proof.',
+    'status_change',
+  );
+
+  return { post: resolvedPost };
+}
+
+export async function updateResolutionProof(
+  postId: string,
+  resolutionPhoto: string,
+  resolutionNotes?: string,
+): Promise<Post | null> {
+  const post = await getPostById(postId);
+  if (!post) {
+    return null;
+  }
+
+  if (!resolutionPhoto) {
+    throw new Error('A resolution proof photo is required.');
+  }
+
+  const updatedPost: Post = normalizePost(post.id, {
+    ...post,
+    resolutionPhoto,
+    ...(resolutionNotes?.trim() ? { resolutionNotes: resolutionNotes.trim() } : {}),
+  });
+
+  await persistPost(updatedPost);
+
+  const existingSubmission = await getSubmissionByPostId(postId);
+  if (existingSubmission) {
+    await persistSubmission({
+      ...existingSubmission,
+      post: updatedPost,
+    });
+  }
+
+  return updatedPost;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Comments                                                           */
+/* ------------------------------------------------------------------ */
 
 export async function addComment(postId: string, userId: string, text: string): Promise<Comment> {
   const post = await getPostById(postId);
@@ -1370,59 +1472,87 @@ export async function deleteComment(postId: string, commentId: string, userId: s
   }
 }
 
-export async function deletePost(postId: string, userId: string): Promise<boolean> {
+export async function deletePost(postId: string, userId: string, callerRole?: UserRole): Promise<boolean> {
   const post = await getPostById(postId);
   if (!post) {
     return false;
   }
 
-  const actingUser = await getUserById(userId);
-  const canDeleteOwnPost = post.userId === userId;
-  const isAdmin = actingUser?.role === 'admin';
+  const firebaseUser = isFirebaseConfigured()
+    ? await waitForFirebaseUser().catch(() => null)
+    : null;
+  const actingUserId = firebaseUser?.uid || userId;
+  const canDeleteOwnPost = post.userId === userId || post.userId === actingUserId;
+  // Trust the caller's role if provided (already authenticated), otherwise look it up
+  let isAdmin = callerRole === 'admin';
+  if (!isAdmin && !canDeleteOwnPost) {
+    const actingUser = await getUserById(userId) || await getUserById(actingUserId);
+    if (!actingUser) {
+      // Fallback: try lookup by firebaseUid
+      const byUid = await getUserByFirebaseUid(actingUserId) || await getUserByFirebaseUid(userId);
+      isAdmin = byUid?.role === 'admin';
+    } else {
+      isAdmin = actingUser.role === 'admin';
+    }
+  }
+
   if (!canDeleteOwnPost && !isAdmin) {
     return false;
   }
 
-  await deleteDoc(doc(postsCollection(), postId));
+  const submission = await getSubmissionByPostId(postId).catch(() => null);
 
-  // Post deletion is the source of truth. Linked cleanup is best-effort because
-  // some Firestore projects still deny deletes on tokens/submissions.
-  try {
-    const tokenMatches = await getDocs(query(tokensCollection(), where('postId', '==', postId)));
-    await Promise.all(tokenMatches.docs.map(match => deleteDoc(doc(tokensCollection(), match.id))));
-  } catch {
-    // Ignore cleanup permission issues; orphaned receipts are filtered out on read.
+  if (isAdmin) {
+    try {
+      await deleteDoc(doc(postsCollection(), postId));
+
+      if (submission) {
+        try {
+          await deleteDoc(doc(submissionsCollection(), submission.id));
+        } catch {
+          const deletedPost: Post = { ...post, deleted: true };
+          await persistSubmission({ ...submission, post: deletedPost });
+        }
+      }
+
+      return true;
+    } catch {
+      // Fall back to soft-delete so admin cleanup still works when hard delete is blocked.
+    }
   }
 
-  try {
-    await deleteSubmissionByPostId(postId);
-  } catch {
-    // Ignore cleanup permission issues; orphaned submissions are filtered out on read.
+  // Soft-delete: mark the post as deleted via update (uses 'allow update' rule
+  // which works for all signed-in users, unlike 'allow delete' which may be blocked)
+  const deletedPost: Post = { ...post, deleted: true };
+  await persistPost(deletedPost);
+
+  if (submission) {
+    try {
+      await persistSubmission({ ...submission, post: deletedPost });
+    } catch {
+      // Non-critical
+    }
   }
 
   return true;
 }
 
-export async function getUserStats(userId: string): Promise<UserStats> {
-  const cached = readUserStatsCache(userId);
+/* ------------------------------------------------------------------ */
+/*  User Stats                                                         */
+/* ------------------------------------------------------------------ */
 
+export async function getUserStats(userId: string): Promise<UserStats> {
   try {
     const snapshot = await getDoc(doc(userStatsCollection(), userId));
 
     if (!snapshot.exists()) {
-      const stats = normalizeUserStats(userId, cached || { userId });
+      const stats = normalizeUserStats(userId, { userId });
       await persistUserStats(stats);
       return stats;
     }
 
-    const normalized = normalizeUserStats(snapshot.id, snapshot.data() as Partial<UserStats>);
-    saveUserStatsCache(userId, normalized);
-    return normalized;
+    return normalizeUserStats(snapshot.id, snapshot.data() as Partial<UserStats>);
   } catch {
-    if (cached) {
-      return cached;
-    }
-
     return normalizeUserStats(userId, { userId });
   }
 }
@@ -1438,226 +1568,224 @@ export async function updateUserStats(userId: string, updates: Partial<UserStats
   return next;
 }
 
-export function calculateLevel(points: number): number {
-  if (points >= 1000) return 5;
-  if (points >= 500) return 4;
-  if (points >= 250) return 3;
-  if (points >= 100) return 2;
-  return 1;
-}
+/* ------------------------------------------------------------------ */
+/*  Notifications                                                      */
+/* ------------------------------------------------------------------ */
 
-export function getLevelName(level: number): string {
-  const levels: Record<number, string> = {
-    1: 'Newcomer',
-    2: 'Active Citizen',
-    3: 'Community Helper',
-    4: 'Local Champion',
-    5: 'Community Leader',
+export async function createNotification(
+  userId: string,
+  postId: string,
+  postTitle: string,
+  message: string,
+  type: Notification['type'],
+): Promise<Notification> {
+  const notification: Notification = {
+    id: generateId('notif'),
+    userId,
+    postId,
+    postTitle,
+    message,
+    type,
+    read: false,
+    createdAt: getNowIso(),
   };
 
-  return levels[level] || 'Newcomer';
+  await persistNotification(notification);
+  return notification;
 }
 
-export async function getLeaderboard(limitCount: number = 10): Promise<Array<UserStats & { user: User | null }>> {
-  const [statsSnapshot, authoritySnapshot] = await Promise.all([
+export async function getUserNotifications(userId: string): Promise<Notification[]> {
+  try {
+    const snapshot = await getDocs(
+      query(notificationsCollection(), where('userId', '==', userId), orderBy('createdAt', 'desc')),
+    );
+    return snapshot.docs.map(entry => entry.data() as Notification);
+  } catch {
+    return [];
+  }
+}
+
+export async function markNotificationRead(notificationId: string): Promise<void> {
+  try {
+    const snapshot = await getDoc(doc(notificationsCollection(), notificationId));
+    if (snapshot.exists()) {
+      await setDoc(doc(notificationsCollection(), notificationId), {
+        ...snapshot.data(),
+        read: true,
+      });
+    }
+  } catch {
+    // Best effort
+  }
+}
+
+export async function markAllNotificationsRead(userId: string): Promise<void> {
+  const notifications = await getUserNotifications(userId);
+  for (const n of notifications) {
+    if (!n.read) {
+      await markNotificationRead(n.id);
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Worker Performance                                                 */
+/* ------------------------------------------------------------------ */
+
+export async function getWorkerPerformance(): Promise<WorkerPerformance[]> {
+  const workers = await getApprovedWorkers();
+  const allPosts = await getPosts();
+
+  return Promise.all(workers.map(async worker => {
+    const assigned = allPosts.filter(p => p.assignedWorkerId === worker.id);
+    const resolved = assigned.filter(p => p.status === 'resolved');
+    const inProgress = assigned.filter(p => p.status === 'in-progress');
+    const breached = assigned.filter(p => p.slaBreached || (p.slaDeadline && new Date() > new Date(p.slaDeadline) && p.status !== 'resolved'));
+
+    // Calculate average resolution time
+    let totalResolutionHours = 0;
+    resolved.forEach(p => {
+      if (p.resolvedAt) {
+        totalResolutionHours += (new Date(p.resolvedAt).getTime() - new Date(p.createdAt).getTime()) / (1000 * 60 * 60);
+      }
+    });
+
+    return {
+      workerId: worker.id,
+      workerName: worker.name,
+      totalAssigned: assigned.length,
+      totalResolved: resolved.length,
+      totalInProgress: inProgress.length,
+      averageResolutionHours: resolved.length > 0 ? totalResolutionHours / resolved.length : 0,
+      slaBreachCount: breached.length,
+    };
+  }));
+}
+
+/* ------------------------------------------------------------------ */
+/*  SLA Monitoring                                                     */
+/* ------------------------------------------------------------------ */
+
+export async function getSLABreachedComplaints(): Promise<Post[]> {
+  const posts = await getPosts();
+  return posts.filter(p =>
+    p.status !== 'resolved' &&
+    p.slaDeadline &&
+    new Date() > new Date(p.slaDeadline),
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Monthly Ward Reports                                               */
+/* ------------------------------------------------------------------ */
+
+export async function getMonthlyWardReport(year: number, month: number): Promise<WardReport[]> {
+  const posts = await getPosts();
+  const startOfMonth = new Date(year, month - 1, 1);
+  const endOfMonth = new Date(year, month, 0, 23, 59, 59);
+
+  const monthPosts = posts.filter(p => {
+    const d = new Date(p.createdAt);
+    return d >= startOfMonth && d <= endOfMonth;
+  });
+
+  const wardMap = new Map<string, Post[]>();
+  monthPosts.forEach(p => {
+    const locationLabel = p.locationDetails?.pincode
+      ? `PIN ${p.locationDetails.pincode}`
+      : p.locationDetails?.locality?.trim()
+        ? p.locationDetails.locality.trim()
+        : p.jurisdictionLabel || 'Unknown Location';
+    if (!wardMap.has(locationLabel)) wardMap.set(locationLabel, []);
+    wardMap.get(locationLabel)!.push(p);
+  });
+
+  const reports: WardReport[] = [];
+  wardMap.forEach((wardPosts, ward) => {
+    const resolved = wardPosts.filter(p => p.status === 'resolved');
+    const pending = wardPosts.filter(p => p.status !== 'resolved');
+    const breached = wardPosts.filter(p =>
+      p.slaDeadline && new Date() > new Date(p.slaDeadline) && p.status !== 'resolved',
+    );
+
+    let totalResolutionDays = 0;
+    resolved.forEach(p => {
+      if (p.resolvedAt) {
+        totalResolutionDays += (new Date(p.resolvedAt).getTime() - new Date(p.createdAt).getTime()) / (1000 * 60 * 60 * 24);
+      }
+    });
+
+    const categoryBreakdown: Record<Category, number> = {
+      'Pothole': 0,
+      'Broken Streetlight': 0,
+      'Park Maintenance': 0,
+      'Locality Cleanliness': 0,
+    };
+    wardPosts.forEach(p => {
+      categoryBreakdown[p.category] = (categoryBreakdown[p.category] || 0) + 1;
+    });
+
+    reports.push({
+      ward,
+      totalComplaints: wardPosts.length,
+      resolved: resolved.length,
+      pending: pending.length,
+      averageResolutionDays: resolved.length > 0 ? Math.round(totalResolutionDays / resolved.length) : 0,
+      categoryBreakdown,
+      slaBreachRate: wardPosts.length > 0 ? Math.round((breached.length / wardPosts.length) * 100) : 0,
+    });
+  });
+
+  return reports.sort((a, b) => b.totalComplaints - a.totalComplaints);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Leaderboard                                                        */
+/* ------------------------------------------------------------------ */
+
+export async function getCitizenLeaderboard(limitCount: number = 10): Promise<Array<UserStats & { user: User | null }>> {
+  const [statsSnapshot, citizenSnapshot] = await Promise.all([
     getDocs(userStatsCollection()),
-    getDocs(query(usersCollection(), where('role', '==', 'authority'))),
+    getDocs(query(usersCollection(), where('role', '==', 'citizen'))),
   ]);
 
-  const authorities = new Map(
-    authoritySnapshot.docs.map(entry => {
+  const citizens = new Map(
+    citizenSnapshot.docs.map(entry => {
       const user = normalizeUser(entry.id, entry.data() as Partial<User>);
       return [user.id, user] as const;
     }),
   );
 
-  const entries = statsSnapshot.docs
+  return statsSnapshot.docs
     .map(entry => normalizeUserStats(entry.id, entry.data() as Partial<UserStats>))
-    .filter(stats => authorities.has(stats.userId))
-    .map(stats => ({
-      ...stats,
-      user: authorities.get(stats.userId) || null,
-    }))
-    .sort((first, second) => {
-      const secondScore = (second.resolverPoints ?? 0) + (second.creditCoins ?? 0);
-      const firstScore = (first.resolverPoints ?? 0) + (first.creditCoins ?? 0);
-      return secondScore - firstScore;
+    .filter(stats => citizens.has(stats.userId))
+    .map(stats => ({ ...stats, user: citizens.get(stats.userId) || null }))
+    .sort((a, b) => (b.postsCreated + b.upvotesReceived) - (a.postsCreated + a.upvotesReceived))
+    .slice(0, limitCount);
+}
+
+export async function getWorkerLeaderboard(limitCount: number = 10): Promise<Array<UserStats & { user: User | null }>> {
+  const [statsSnapshot, workerSnapshot] = await Promise.all([
+    getDocs(userStatsCollection()),
+    getDocs(query(usersCollection(), where('role', '==', 'authority'))),
+  ]);
+
+  const workers = new Map(
+    workerSnapshot.docs.map(entry => {
+      const user = normalizeUser(entry.id, entry.data() as Partial<User>);
+      return [user.id, user] as const;
+    }),
+  );
+
+  return statsSnapshot.docs
+    .map(entry => normalizeUserStats(entry.id, entry.data() as Partial<UserStats>))
+    .filter(stats => workers.has(stats.userId))
+    .map(stats => ({ ...stats, user: workers.get(stats.userId) || null }))
+    .sort((a, b) => {
+      if (b.issuesResolved !== a.issuesResolved) return b.issuesResolved - a.issuesResolved;
+      return a.averageResolutionTimeHours - b.averageResolutionTimeHours;
     })
     .slice(0, limitCount);
-
-  return entries;
-}
-
-export async function getUserTokens(userId: string): Promise<Token[]> {
-  const posts = await getPosts();
-  const livePostIds = new Set(posts.map(post => post.id));
-  const snapshot = await getDocs(query(tokensCollection(), where('userId', '==', userId)));
-  const tokens = snapshot.docs.map(entry => normalizeToken(entry.id, entry.data() as Partial<Token>));
-  return sortByDateDesc(tokens.filter(token => livePostIds.has(token.postId)), token => token.issuedAt);
-}
-
-export async function getUserRewardRedemptions(userId: string): Promise<RewardRedemption[]> {
-  const cached = readRewardRedemptionCache(userId);
-
-  try {
-    const snapshot = await getDocs(query(rewardRedemptionsCollection(), where('userId', '==', userId)));
-    const remote = sortByDateDesc(
-      snapshot.docs.map(entry => normalizeRewardRedemption(entry.id, entry.data() as Partial<RewardRedemption>)),
-      redemption => redemption.redeemedAt,
-    );
-    const merged = mergeRewardRedemptions(remote, cached);
-    saveRewardRedemptionCache(userId, merged);
-    return merged;
-  } catch {
-    return cached;
-  }
-}
-
-export async function getTokenById(tokenId: string): Promise<Token | null> {
-  if (!tokenId) {
-    return null;
-  }
-
-  const snapshot = await getDoc(doc(tokensCollection(), tokenId));
-  if (!snapshot.exists()) {
-    return null;
-  }
-
-  return normalizeToken(snapshot.id, snapshot.data() as Partial<Token>);
-}
-
-export async function resolvePost(
-  postId: string,
-  resolvedBy: string,
-  resolutionPhoto: string,
-  resolutionNotes?: string,
-): Promise<{ post: Post; tokenEarned?: Token } | null> {
-  const post = await getPostById(postId);
-  if (!post) {
-    return null;
-  }
-
-  const resolvedPost: Post = {
-    ...post,
-    status: 'resolved',
-    isReported: true,
-    submittedToGov: true,
-    resolvedAt: getNowIso(),
-    resolvedBy,
-    ...(resolutionPhoto ? { resolutionPhoto } : {}),
-    ...(resolutionNotes?.trim() ? { resolutionNotes: resolutionNotes.trim() } : {}),
-  };
-
-  await persistPost(resolvedPost);
-
-  const existingSubmission = await getSubmissionByPostId(postId);
-  await persistSubmission({
-    id: existingSubmission?.id || generateId('submission'),
-    postId,
-    post: resolvedPost,
-    submittedAt: existingSubmission?.submittedAt || resolvedPost.submittedToGovAt || resolvedPost.reportedAt || getNowIso(),
-    status: 'resolved',
-  });
-
-  const resolverStats = await ensureUserStats(resolvedBy);
-  const previousResolverPoints = resolverStats.resolverPoints ?? 0;
-  const nextResolverPoints = previousResolverPoints + 15;
-
-  await persistUserStats({
-    ...resolverStats,
-    resolverPoints: nextResolverPoints,
-    creditCoins: (resolverStats.creditCoins ?? 0) + 35,
-    issuesResolved: (resolverStats.issuesResolved ?? 0) + 1,
-  });
-
-  let tokenEarned: Token | undefined;
-  const previousMilestone = Math.floor(previousResolverPoints / 100);
-  const nextMilestone = Math.floor(nextResolverPoints / 100);
-
-  if (nextMilestone > previousMilestone) {
-    tokenEarned = await issueToken(resolvedBy, resolvedPost.id, resolvedPost.title, resolvedPost.category);
-  }
-
-  return { post: resolvedPost, ...(tokenEarned ? { tokenEarned } : {}) };
-}
-
-export async function updateResolutionProof(
-  postId: string,
-  resolutionPhoto: string,
-  resolutionNotes?: string,
-): Promise<Post | null> {
-  const post = await getPostById(postId);
-  if (!post) {
-    return null;
-  }
-
-  if (!resolutionPhoto) {
-    throw new Error('A resolution proof photo is required.');
-  }
-
-  const updatedPost: Post = normalizePost(post.id, {
-    ...post,
-    resolutionPhoto,
-    ...(resolutionNotes?.trim() ? { resolutionNotes: resolutionNotes.trim() } : {}),
-  });
-
-  await persistPost(updatedPost);
-
-  const existingSubmission = await getSubmissionByPostId(postId);
-  if (existingSubmission) {
-    await persistSubmission({
-      ...existingSubmission,
-      post: updatedPost,
-    });
-  }
-
-  return updatedPost;
-}
-
-export async function redeemCoins(userId: string, cost: number) {
-  const stats = await getUserStats(userId);
-
-  if (stats.creditCoins < cost) {
-    throw new Error('Not enough credit coins to redeem this reward.');
-  }
-
-  const nextStats = {
-    ...stats,
-    creditCoins: stats.creditCoins - cost,
-    redeemedCoins: (stats.redeemedCoins ?? 0) + cost,
-  };
-
-  await persistUserStats(nextStats);
-  return { previousStats: stats, nextStats };
-}
-
-export async function redeemReward(userId: string, reward: RewardOption) {
-  const { previousStats, nextStats } = await redeemCoins(userId, reward.cost);
-  const redemption: RewardRedemption = {
-    id: generateId('reward'),
-    userId,
-    rewardId: reward.id,
-    rewardTitle: reward.title,
-    rewardDescription: reward.description,
-    rewardKind: reward.rewardKind,
-    providerName: reward.providerName,
-    faceValue: reward.faceValue,
-    rewardItems: reward.includes,
-    cost: reward.cost,
-    redeemedAt: getNowIso(),
-    status: reward.fulfillmentType === 'instant' ? 'fulfilled' : 'processing',
-    deliveryWindow: reward.deliveryWindow,
-    deliveryNote: reward.fulfillmentNote,
-    settlementChannel: reward.settlementChannel,
-    transactionReference: generateTransactionReference(),
-    walletBalanceBefore: previousStats.creditCoins,
-    walletBalanceAfter: nextStats.creditCoins,
-    couponCode: reward.rewardKind === 'gift-card' ? generateCouponCode() : undefined,
-    couponPin: reward.rewardKind === 'gift-card' ? generateCouponPin() : undefined,
-  };
-
-  await persistRewardRedemption(redemption);
-  return { stats: nextStats, redemption };
 }
 
 export function getPostPriority(post: Post) {

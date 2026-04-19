@@ -1,13 +1,26 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Analytics } from '@vercel/analytics/next';
+import { PwaRegister } from '@/components/PwaRegister';
 import { ThemeProvider } from '@/components/theme-provider';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Fix my area',
+  title: {
+    default: 'Fix my area',
+    template: '%s | Fix my area',
+  },
   description:
     'A modern public grievance and civic coordination portal for citizens, local administrations, and control-room teams across India.',
+  applicationName: 'Fix my area',
   generator: 'Codex',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'Fix my area',
+  },
+  formatDetection: {
+    telephone: false,
+  },
   icons: {
     icon: [
       {
@@ -27,6 +40,14 @@ export const metadata: Metadata = {
   },
 };
 
+export const viewport: Viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#fff8ef' },
+    { media: '(prefers-color-scheme: dark)', color: '#1f2937' },
+  ],
+  colorScheme: 'light',
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -35,6 +56,7 @@ export default function RootLayout({
   return (
     <html lang="en-IN" suppressHydrationWarning>
       <body className="font-sans antialiased">
+        <PwaRegister />
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
           {children}
         </ThemeProvider>

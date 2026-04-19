@@ -9,21 +9,169 @@ export interface ComplaintLocation {
   landmark?: string;
 }
 
-export interface RewardOption {
-  id: string;
-  title: string;
-  description: string;
-  cost: number;
-  audience: 'citizen' | 'authority' | 'all';
-  providerName: string;
-  faceValue: string;
-  rewardKind: 'gift-card' | 'service-benefit' | 'certificate';
-  settlementChannel: string;
-  includes: string[];
-  deliveryWindow: string;
-  fulfillmentType: 'instant' | 'scheduled';
-  fulfillmentNote: string;
+/* ------------------------------------------------------------------ */
+/*  Ward / Zone constants                                              */
+/* ------------------------------------------------------------------ */
+
+export const WARDS = Array.from({ length: 25 }, (_, i) => `Ward ${i + 1}`);
+
+export const JALANDHAR_STATE = 'Punjab';
+export const JALANDHAR_DISTRICT = 'Jalandhar';
+
+export const JALANDHAR_PINCODE_OPTIONS = [
+  {
+    pincode: '144001',
+    label: 'Civil Lines, Railway Station, Ladowali Road',
+    areas: ['Civil Lines', 'Railway Station Area', 'Ladowali Road', 'Court Complex'],
+  },
+  {
+    pincode: '144002',
+    label: 'Model Town, Nehru Garden, BMC Chowk',
+    areas: ['Model Town', 'Nehru Garden', 'BMC Chowk', 'Central Town'],
+  },
+  {
+    pincode: '144003',
+    label: 'Sodal, Industrial Area, Football Chowk',
+    areas: ['Sodal Road', 'Industrial Area', 'Football Chowk', 'Old Jail Road'],
+  },
+  {
+    pincode: '144004',
+    label: 'Basti Sheikh, Kapurthala Road, Patel Nagar',
+    areas: ['Basti Sheikh', 'Kapurthala Road', 'Patel Nagar', 'Basti Danishmanda'],
+  },
+  {
+    pincode: '144005',
+    label: 'Jalandhar Cantt, Garha, Deep Nagar',
+    areas: ['Jalandhar Cantt', 'Garha', 'Deep Nagar', 'Mithapur Road'],
+  },
+  {
+    pincode: '144006',
+    label: 'Rama Mandi, Hoshiarpur Road, Khurla Kingra',
+    areas: ['Rama Mandi', 'Hoshiarpur Road', 'Khurla Kingra', 'Suchi Pind'],
+  },
+  {
+    pincode: '144008',
+    label: 'Urban Estate, Wadala Chowk, Guru Gobind Singh Avenue',
+    areas: ['Urban Estate Phase 1', 'Urban Estate Phase 2', 'Wadala Chowk', 'Guru Gobind Singh Avenue'],
+  },
+  {
+    pincode: '144009',
+    label: 'Surya Enclave, Bootan Mandi, 66 Feet Road',
+    areas: ['Surya Enclave', 'Bootan Mandi', '66 Feet Road', 'New Jawahar Nagar'],
+  },
+] as const;
+
+export function getJalandharAreasForPincode(pincode?: string) {
+  return JALANDHAR_PINCODE_OPTIONS.find(option => option.pincode === pincode)?.areas || [];
 }
+
+export function isValidJalandharPincode(pincode?: string) {
+  return !!pincode && JALANDHAR_PINCODE_OPTIONS.some(option => option.pincode === pincode);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Complaint categories aligned to spec                               */
+/* ------------------------------------------------------------------ */
+
+export const COMPLAINT_CATEGORIES: Category[] = [
+  'Pothole',
+  'Broken Streetlight',
+  'Park Maintenance',
+  'Locality Cleanliness',
+];
+
+export const CATEGORY_META: Record<Category, { department: string; accent: string; shortLabel: string; icon: string }> = {
+  'Pothole': {
+    department: 'Public Works Department',
+    accent: 'from-[#475569] to-[#334155]',
+    shortLabel: 'PWD',
+    icon: '🕳️',
+  },
+  'Broken Streetlight': {
+    department: 'Electrical Maintenance',
+    accent: 'from-[#ca8a04] to-[#a16207]',
+    shortLabel: 'EM',
+    icon: '💡',
+  },
+  'Park Maintenance': {
+    department: 'Parks & Gardens',
+    accent: 'from-[#16a34a] to-[#15803d]',
+    shortLabel: 'PG',
+    icon: '🌳',
+  },
+  'Locality Cleanliness': {
+    department: 'Sanitation Department',
+    accent: 'from-[#0891b2] to-[#0e7490]',
+    shortLabel: 'SD',
+    icon: '🧹',
+  },
+};
+
+/* ------------------------------------------------------------------ */
+/*  SLA deadlines per complaint type                                   */
+/* ------------------------------------------------------------------ */
+
+/** SLA deadline in hours per complaint category */
+export const SLA_DEADLINES: Record<Category, number> = {
+  'Broken Streetlight': 48,
+  'Pothole': 7 * 24,
+  'Park Maintenance': 5 * 24,
+  'Locality Cleanliness': 3 * 24,
+};
+
+/** Human-readable SLA label */
+export const SLA_LABELS: Record<Category, string> = {
+  'Broken Streetlight': '48 hours',
+  'Pothole': '7 days',
+  'Park Maintenance': '5 days',
+  'Locality Cleanliness': '3 days',
+};
+
+/** Compute ISO string deadline from creation date and category */
+export function computeSLADeadline(createdAt: string, category: Category): string {
+  const hours = SLA_DEADLINES[category] || 7 * 24;
+  const deadline = new Date(new Date(createdAt).getTime() + hours * 60 * 60 * 1000);
+  return deadline.toISOString();
+}
+
+/** Check if SLA is breached */
+export function isSLABreached(slaDeadline: string | undefined, status: string): boolean {
+  if (!slaDeadline || status === 'resolved') return false;
+  return new Date() > new Date(slaDeadline);
+}
+
+/** Get remaining hours until SLA breach (negative = breached) */
+export function getSLARemainingHours(slaDeadline: string | undefined): number {
+  if (!slaDeadline) return 0;
+  const diff = new Date(slaDeadline).getTime() - Date.now();
+  return Math.round(diff / (1000 * 60 * 60));
+}
+
+/** Format SLA remaining as human-readable string */
+export function formatSLARemaining(slaDeadline: string | undefined, status: string): string {
+  if (status === 'resolved') return 'Resolved';
+  if (!slaDeadline) return 'No SLA set';
+
+  const hours = getSLARemainingHours(slaDeadline);
+
+  if (hours < 0) {
+    const breachedHours = Math.abs(hours);
+    if (breachedHours >= 24) {
+      return `Overdue by ${Math.floor(breachedHours / 24)}d ${breachedHours % 24}h`;
+    }
+    return `Overdue by ${breachedHours}h`;
+  }
+
+  if (hours >= 24) {
+    return `${Math.floor(hours / 24)}d ${hours % 24}h remaining`;
+  }
+
+  return `${hours}h remaining`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  India states                                                       */
+/* ------------------------------------------------------------------ */
 
 export const INDIA_STATES_AND_UTS = [
   'Andhra Pradesh',
@@ -64,81 +212,12 @@ export const INDIA_STATES_AND_UTS = [
   'Puducherry',
 ] as const;
 
-export const CATEGORY_META: Record<Category, { department: string; accent: string; shortLabel: string }> = {
-  Infrastructure: { department: 'Urban Development', accent: 'from-[#f97316] to-[#ea580c]', shortLabel: 'UD' },
-  Education: { department: 'School Education', accent: 'from-[#2563eb] to-[#1d4ed8]', shortLabel: 'ED' },
-  Electricity: { department: 'Power Distribution', accent: 'from-[#ca8a04] to-[#a16207]', shortLabel: 'PW' },
-  Water: { department: 'Water Resources', accent: 'from-[#0891b2] to-[#0e7490]', shortLabel: 'WT' },
-  Roads: { department: 'Public Works Department', accent: 'from-[#475569] to-[#334155]', shortLabel: 'RD' },
-  Healthcare: { department: 'Health Services', accent: 'from-[#dc2626] to-[#b91c1c]', shortLabel: 'HC' },
-  Other: { department: 'District Administration', accent: 'from-[#7c3aed] to-[#6d28d9]', shortLabel: 'AD' },
-};
-
-export const REWARD_CATALOG: RewardOption[] = [
-  {
-    id: 'national-essentials-card',
-    title: 'National Essentials Gift Card',
-    description: 'A professionally issued digital gift card for daily essentials and partner marketplace purchases.',
-    cost: 120,
-    audience: 'all',
-    providerName: 'National Consumer Cooperative',
-    faceValue: 'Rs.150 stored value',
-    rewardKind: 'gift-card',
-    settlementChannel: 'National Rewards Settlement Desk',
-    includes: ['Instant coupon code', '4-digit claim PIN', 'Partner checkout usage note'],
-    deliveryWindow: 'Instant digital issuance',
-    fulfillmentType: 'instant',
-    fulfillmentNote: 'A secured coupon code and claim PIN are issued immediately and recorded in your redemption ledger.',
-  },
-  {
-    id: 'mobility-topup-card',
-    title: 'Urban Mobility Gift Card',
-    description: 'Digital transit and mobility top-up card suited for metro, bus, and approved travel partner recharges.',
-    cost: 180,
-    audience: 'all',
-    providerName: 'Integrated Transit Partner Network',
-    faceValue: 'Rs.220 transit value',
-    rewardKind: 'gift-card',
-    settlementChannel: 'Mobility Benefits Counter',
-    includes: ['Redeemable coupon code', 'Transit partner PIN', 'Usage receipt reference'],
-    deliveryWindow: 'Instant access',
-    fulfillmentType: 'instant',
-    fulfillmentNote: 'The wallet settles the redemption instantly and stores the transit coupon in your gift card vault.',
-  },
-  {
-    id: 'citizen-family-care-card',
-    title: 'Citizen Family Care Gift Card',
-    description: 'A higher-tier citizen reward with a reusable digital coupon for approved wellness and family services.',
-    cost: 220,
-    audience: 'citizen',
-    providerName: 'Jan Seva Citizen Benefits Cell',
-    faceValue: 'Rs.275 citizen benefit value',
-    rewardKind: 'gift-card',
-    settlementChannel: 'District Citizen Rewards Cell',
-    includes: ['Secure coupon code', 'Claim PIN', 'Citizen benefits receipt note'],
-    deliveryWindow: 'Instant access',
-    fulfillmentType: 'instant',
-    fulfillmentNote: 'Citizen benefit cards are issued instantly after balance verification and remain available in transaction history.',
-  },
-  {
-    id: 'field-support-card',
-    title: 'Field Support Gift Card',
-    description: 'A controlled operational gift card for workers and field authorities to claim approved support value.',
-    cost: 260,
-    audience: 'authority',
-    providerName: 'Public Works Support Desk',
-    faceValue: 'Rs.320 operational value',
-    rewardKind: 'gift-card',
-    settlementChannel: 'Field Logistics Redemption Unit',
-    includes: ['Operational coupon code', '4-digit release PIN', 'Settlement audit reference'],
-    deliveryWindow: 'Instant access',
-    fulfillmentType: 'instant',
-    fulfillmentNote: 'Operational support cards are released instantly and the coupon remains available for audit and re-copy.',
-  },
-];
+/* ------------------------------------------------------------------ */
+/*  Location utilities                                                 */
+/* ------------------------------------------------------------------ */
 
 export function formatLocationLabel(location?: Partial<ComplaintLocation> | null, fallback?: string) {
-  const segments = [location?.locality, location?.ward, location?.district, location?.state]
+  const segments = [location?.locality, location?.landmark, location?.pincode, location?.district, location?.state]
     .map(value => value?.trim())
     .filter(Boolean);
 
@@ -152,35 +231,45 @@ export function formatLocationLabel(location?: Partial<ComplaintLocation> | null
 export function buildJurisdictionLabel(location?: Partial<ComplaintLocation> | null, fallback?: string) {
   const state = location?.state?.trim();
   const district = location?.district?.trim();
-  const locality = location?.locality?.trim();
+  const pincode = location?.pincode?.trim();
 
   if (district && state) {
     return `${district}, ${state}`;
   }
 
-  if (locality && district) {
-    return `${locality}, ${district}`;
+  if (district && pincode) {
+    return `${district} ${pincode}`;
   }
 
   return formatLocationLabel(location, fallback);
 }
 
 export function getDepartmentForCategory(category: Category) {
-  return CATEGORY_META[category]?.department || CATEGORY_META.Other.department;
+  return CATEGORY_META[category]?.department || 'Municipal Administration';
 }
 
-export function getComplaintPriority(post: Pick<Post, 'category' | 'status'> & { likes?: number; score?: number }) {
-  const engagement = post.score ?? post.likes ?? 0;
+/* ------------------------------------------------------------------ */
+/*  Priority scoring                                                   */
+/* ------------------------------------------------------------------ */
+
+export function getComplaintPriority(post: Pick<Post, 'category' | 'status'> & { upvotes?: number; score?: number }) {
+  const engagement = post.upvotes ?? post.score ?? 0;
 
   if (post.status === 'resolved') {
     return 'resolved';
   }
 
-  if (post.category === 'Healthcare' || engagement >= 25) {
+  // Safety-critical: Broken streetlights and potholes are safety issues
+  if (post.category === 'Broken Streetlight' || post.category === 'Pothole') {
+    if (engagement >= 15) return 'critical';
     return 'urgent';
   }
 
-  if (post.category === 'Electricity' || post.category === 'Water' || engagement >= 10) {
+  if (engagement >= 20) {
+    return 'urgent';
+  }
+
+  if (engagement >= 10) {
     return 'priority';
   }
 
@@ -188,22 +277,64 @@ export function getComplaintPriority(post: Pick<Post, 'category' | 'status'> & {
 }
 
 export function computePostScore(post: {
-  likes?: number;
-  dislikes?: number;
   upvotes?: number;
+  likes?: number;
   createdAt?: string;
 }) {
-  const likes = post.likes ?? post.upvotes ?? 0;
-  const dislikes = post.dislikes ?? 0;
-  const engagement = likes - dislikes;
+  const upvotes = post.upvotes ?? post.likes ?? 0;
   const ageHours = Math.max(1, (Date.now() - new Date(post.createdAt || 0).getTime()) / (1000 * 60 * 60));
-  return Math.round((engagement * 8) + (likes * 2) - ageHours / 6);
+  return Math.round((upvotes * 10) - ageHours / 6);
 }
 
-export function getRewardOptionsForRole(role: 'citizen' | 'authority' | 'admin') {
-  if (role === 'admin') {
-    return REWARD_CATALOG.filter(option => option.audience === 'all');
-  }
+/* ------------------------------------------------------------------ */
+/*  Duplicate detection                                                */
+/* ------------------------------------------------------------------ */
 
-  return REWARD_CATALOG.filter(option => option.audience === role || option.audience === 'all');
+/** Simple similarity check using word overlap */
+function wordOverlapScore(a: string, b: string): number {
+  const wordsA = new Set(a.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  const wordsB = new Set(b.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+
+  let overlap = 0;
+  wordsA.forEach(word => {
+    if (wordsB.has(word)) overlap++;
+  });
+
+  return overlap / Math.max(wordsA.size, wordsB.size);
+}
+
+/** Check if two complaints are likely duplicates */
+export function areLikelyDuplicates(
+  postA: { title: string; category: string; locationDetails?: { ward?: string; pincode?: string; locality?: string; district?: string } },
+  postB: { title: string; category: string; locationDetails?: { ward?: string; pincode?: string; locality?: string; district?: string } },
+): boolean {
+  // Must be same category
+  if (postA.category !== postB.category) return false;
+
+  const pincodeA = postA.locationDetails?.pincode?.trim().toLowerCase();
+  const pincodeB = postB.locationDetails?.pincode?.trim().toLowerCase();
+  if (pincodeA && pincodeB && pincodeA !== pincodeB) return false;
+
+  const localityA = postA.locationDetails?.locality?.trim().toLowerCase();
+  const localityB = postB.locationDetails?.locality?.trim().toLowerCase();
+  if (localityA && localityB && localityA !== localityB) return false;
+
+  const wardA = postA.locationDetails?.ward?.trim().toLowerCase();
+  const wardB = postB.locationDetails?.ward?.trim().toLowerCase();
+  if (wardA && wardB && wardA !== wardB) return false;
+
+  // Title similarity threshold
+  return wordOverlapScore(postA.title, postB.title) >= 0.5;
+}
+
+/** Find potential duplicates from a list of posts */
+export function findDuplicates(
+  newPost: { title: string; category: string; locationDetails?: { ward?: string; pincode?: string; locality?: string; district?: string } },
+  existingPosts: Array<{ id: string; title: string; category: string; locationDetails?: { ward?: string; pincode?: string; locality?: string; district?: string } }>,
+): string[] {
+  return existingPosts
+    .filter(existing => areLikelyDuplicates(newPost, existing))
+    .map(p => p.id);
 }

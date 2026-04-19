@@ -1,32 +1,39 @@
 'use client';
 
 import React, { useRef, useState } from 'react';
-import { Image as ImageIcon, Landmark, MapPin, MapPinned, Navigation, X } from 'lucide-react';
+import { AlertTriangle, Image as ImageIcon, Landmark, MapPin, MapPinned, Navigation, X } from 'lucide-react';
 import { toast } from 'sonner';
-import { createPost, Category, Token } from '@/lib/db';
-import { INDIA_STATES_AND_UTS } from '@/lib/portal';
+import { createPost, Category, getPosts } from '@/lib/db';
+import {
+  COMPLAINT_CATEGORIES,
+  findDuplicates,
+  getJalandharAreasForPincode,
+  isValidJalandharPincode,
+  JALANDHAR_DISTRICT,
+  JALANDHAR_PINCODE_OPTIONS,
+  JALANDHAR_STATE,
+  SLA_LABELS,
+} from '@/lib/portal';
 import { Button } from '@/components/ui/button';
 
 interface CreatePostFormProps {
   userId: string;
-  onPostCreated: (token: Token) => void | Promise<void>;
+  onPostCreated: () => void | Promise<void>;
 }
-
-const categories: Category[] = ['Infrastructure', 'Education', 'Electricity', 'Water', 'Roads', 'Healthcare', 'Other'];
 
 export default function CreatePostForm({ userId, onPostCreated }: CreatePostFormProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [category, setCategory] = useState<Category>('Infrastructure');
-  const [stateName, setStateName] = useState('Maharashtra');
-  const [district, setDistrict] = useState('');
+  const [category, setCategory] = useState<Category>('Pothole');
+  const [district] = useState(JALANDHAR_DISTRICT);
   const [locality, setLocality] = useState('');
-  const [ward, setWard] = useState('');
   const [landmark, setLandmark] = useState('');
   const [pincode, setPincode] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [duplicateWarning, setDuplicateWarning] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const areaSuggestions = getJalandharAreasForPincode(pincode);
 
   const handlePhotoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -66,6 +73,24 @@ export default function CreatePostForm({ userId, onPostCreated }: CreatePostForm
     setPhotos(previous => previous.filter((_, currentIndex) => currentIndex !== index));
   };
 
+  const checkForDuplicates = async () => {
+    if (title.trim().length < 5) return;
+    try {
+      const existingPosts = await getPosts();
+      const dupes = findDuplicates(
+        { title, category, locationDetails: { district, locality, ...(pincode ? { pincode } : {}) } },
+        existingPosts,
+      );
+      if (dupes.length > 0) {
+        setDuplicateWarning(`${dupes.length} similar complaint(s) already reported in this area. Your complaint will be grouped with them.`);
+      } else {
+        setDuplicateWarning('');
+      }
+    } catch {
+      // Ignore errors in duplicate check
+    }
+  };
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setLoading(true);
@@ -79,12 +104,16 @@ export default function CreatePostForm({ userId, onPostCreated }: CreatePostForm
         throw new Error('Complaint description must be at least 20 characters.');
       }
 
-      if (!district.trim() || !locality.trim()) {
-        throw new Error('District and locality are required for administration routing.');
+      if (!isValidJalandharPincode(pincode)) {
+        throw new Error('Please select a valid Jalandhar PIN code.');
       }
 
-      const locationText = [locality, ward, district, stateName].filter(Boolean).join(', ');
-      const { token } = await createPost(
+      if (!locality.trim()) {
+        throw new Error('Please enter the exact location of the issue.');
+      }
+
+      const locationText = [locality, landmark, pincode, district, JALANDHAR_STATE].filter(Boolean).join(', ');
+      await createPost(
         userId,
         title,
         description,
@@ -92,26 +121,24 @@ export default function CreatePostForm({ userId, onPostCreated }: CreatePostForm
         locationText,
         photos,
         {
-          state: stateName,
+          state: JALANDHAR_STATE,
           district,
           locality,
-          ...(ward.trim() ? { ward } : {}),
           ...(landmark.trim() ? { landmark } : {}),
-          ...(pincode.trim() ? { pincode } : {}),
+          pincode,
         },
       );
 
-      await onPostCreated(token);
+      await onPostCreated();
 
       setTitle('');
       setDescription('');
-      setCategory('Infrastructure');
-      setDistrict('');
+      setCategory('Pothole');
       setLocality('');
-      setWard('');
       setLandmark('');
       setPincode('');
       setPhotos([]);
+      setDuplicateWarning('');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to submit complaint.');
     } finally {
@@ -128,43 +155,52 @@ export default function CreatePostForm({ userId, onPostCreated }: CreatePostForm
             type="text"
             value={title}
             onChange={event => setTitle(event.target.value)}
-            placeholder="Streetlight outage outside the primary health centre"
+            onBlur={() => void checkForDuplicates()}
+            placeholder="e.g. Large pothole near the market road junction"
             maxLength={100}
             className="w-full rounded-2xl border border-input bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
           />
         </label>
 
+        {duplicateWarning && (
+          <div className="flex items-start gap-3 rounded-2xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300 md:col-span-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-medium">Possible duplicate detected</p>
+              <p className="mt-1">{duplicateWarning}</p>
+            </div>
+          </div>
+        )}
+
         <label className="block">
-          <span className="mb-2 block text-sm font-semibold text-foreground">Category</span>
+          <span className="mb-2 block text-sm font-semibold text-foreground">Issue type</span>
           <select
             value={category}
             onChange={event => setCategory(event.target.value as Category)}
             className="w-full rounded-2xl border border-input bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-primary"
           >
-            {categories.map(item => (
+            {COMPLAINT_CATEGORIES.map(item => (
               <option key={item} value={item}>
                 {item}
               </option>
             ))}
           </select>
+          <p className="mt-2 text-xs text-muted-foreground">
+            SLA deadline: <span className="font-semibold text-primary">{SLA_LABELS[category]}</span>
+          </p>
         </label>
 
         <label className="block">
           <span className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
             <Landmark className="h-4 w-4 text-primary" />
-            State / Union Territory
+            State
           </span>
-          <select
-            value={stateName}
-            onChange={event => setStateName(event.target.value)}
-            className="w-full rounded-2xl border border-input bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-primary"
-          >
-            {INDIA_STATES_AND_UTS.map(item => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
+          <input
+            type="text"
+            value={JALANDHAR_STATE}
+            readOnly
+            className="w-full rounded-2xl border border-input bg-muted/30 px-4 py-3 text-sm text-foreground outline-none"
+          />
         </label>
 
         <label className="block">
@@ -175,58 +211,66 @@ export default function CreatePostForm({ userId, onPostCreated }: CreatePostForm
           <input
             type="text"
             value={district}
-            onChange={event => setDistrict(event.target.value)}
-            placeholder="Pune"
-            className="w-full rounded-2xl border border-input bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+            readOnly
+            className="w-full rounded-2xl border border-input bg-muted/30 px-4 py-3 text-sm text-foreground outline-none"
           />
+          <p className="mt-2 text-xs text-muted-foreground">Complaints are currently accepted only for Jalandhar district.</p>
         </label>
 
         <label className="block">
           <span className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
             <MapPin className="h-4 w-4 text-primary" />
-            Locality / village / ward area
+            Jalandhar PIN code
           </span>
-          <input
-            type="text"
-            value={locality}
-            onChange={event => setLocality(event.target.value)}
-            placeholder="Kothrud Depot"
-            className="w-full rounded-2xl border border-input bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
-          />
-        </label>
-
-        <label className="block">
-          <span className="mb-2 block text-sm font-semibold text-foreground">Ward / block</span>
-          <input
-            type="text"
-            value={ward}
-            onChange={event => setWard(event.target.value)}
-            placeholder="Ward 12"
-            className="w-full rounded-2xl border border-input bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
-          />
+          <select
+            value={pincode}
+            onChange={event => setPincode(event.target.value)}
+            className="w-full rounded-2xl border border-input bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-primary"
+          >
+            <option value="">Select PIN code...</option>
+            {JALANDHAR_PINCODE_OPTIONS.map(option => (
+              <option key={option.pincode} value={option.pincode}>
+                {option.pincode} - {option.label}
+              </option>
+            ))}
+          </select>
+          {pincode && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Covered areas: {getJalandharAreasForPincode(pincode).join(', ')}
+            </p>
+          )}
         </label>
 
         <label className="block">
           <span className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
             <Navigation className="h-4 w-4 text-primary" />
-            Landmark
+            Exact issue location
+          </span>
+          <input
+            type="text"
+            value={locality}
+            onChange={event => setLocality(event.target.value)}
+            list="jalandhar-area-suggestions"
+            placeholder="e.g. Model Town main road, near BMC Chowk"
+            className="w-full rounded-2xl border border-input bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+          />
+          <datalist id="jalandhar-area-suggestions">
+            {areaSuggestions.map(area => (
+              <option key={area} value={area} />
+            ))}
+          </datalist>
+        </label>
+
+        <label className="block">
+          <span className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Navigation className="h-4 w-4 text-primary" />
+            Landmark / nearby point
           </span>
           <input
             type="text"
             value={landmark}
             onChange={event => setLandmark(event.target.value)}
-            placeholder="Near bus stand / school / panchayat office"
-            className="w-full rounded-2xl border border-input bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
-          />
-        </label>
-
-        <label className="block">
-          <span className="mb-2 block text-sm font-semibold text-foreground">PIN code</span>
-          <input
-            type="text"
-            value={pincode}
-            onChange={event => setPincode(event.target.value.replace(/\D/g, '').slice(0, 6))}
-            placeholder="411038"
+            placeholder="Near bus stand / school / market / chowk"
             className="w-full rounded-2xl border border-input bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
           />
         </label>
@@ -238,7 +282,7 @@ export default function CreatePostForm({ userId, onPostCreated }: CreatePostForm
             onChange={event => setDescription(event.target.value)}
             rows={6}
             maxLength={500}
-            placeholder="Describe what is happening, when it started, who is affected, and whether the issue is urgent or unsafe."
+            placeholder="Describe the issue: what is happening, since when, who is affected, and whether it poses a safety risk."
             className="w-full rounded-[1.5rem] border border-input bg-background px-4 py-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
           />
         </label>
@@ -247,8 +291,8 @@ export default function CreatePostForm({ userId, onPostCreated }: CreatePostForm
       <div className="rounded-[1.5rem] border border-dashed border-border bg-muted/30 p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-semibold text-foreground">Attach on-site evidence</p>
-            <p className="mt-1 text-sm text-muted-foreground">Add up to 5 photos so the district team can verify the issue faster.</p>
+            <p className="text-sm font-semibold text-foreground">Upload photo evidence</p>
+            <p className="mt-1 text-sm text-muted-foreground">Add up to 5 photos so the municipality team can verify the issue faster.</p>
           </div>
           <div>
             <input
@@ -294,7 +338,7 @@ export default function CreatePostForm({ userId, onPostCreated }: CreatePostForm
         disabled={loading}
         className="w-full rounded-full bg-primary py-6 text-base font-semibold text-primary-foreground hover:bg-primary/90"
       >
-        {loading ? 'Submitting complaint...' : 'Submit complaint to local administration'}
+        {loading ? 'Submitting complaint...' : 'Submit complaint'}
       </Button>
     </form>
   );

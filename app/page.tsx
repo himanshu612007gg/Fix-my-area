@@ -1,213 +1,144 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getCurrentUser, initializeDB, logoutUser, User } from '@/lib/db';
-import AuthPage from '@/components/AuthPage';
-import HomePage from '@/components/HomePage';
-import ReportedPostsPage from '@/components/ReportedPostsPage';
-import GovernmentDashboard from '@/components/GovernmentDashboard';
-import AdminDashboard from '@/components/AdminDashboard';
-import Leaderboard from '@/components/Leaderboard';
-import WallOfWins from '@/components/WallOfWins';
-import TokenWallet from '@/components/TokenWallet';
-import Navbar from '@/components/Navbar';
+import { Loader2 } from 'lucide-react';
+import { getCurrentUser, initializeDB, isAuthorityApproved, logoutUser, User } from '@/lib/db';
 import { signOutFirebaseUser } from '@/lib/firebase-auth';
-import { Toaster } from 'sonner';
-import { ShieldCheck } from 'lucide-react';
+import { isFirebaseConfigured } from '@/lib/firebase';
 
-type PageView = 'home' | 'reported' | 'leaderboard' | 'wallofwins' | 'government' | 'auth' | 'tokens' | 'admin';
+import AdminDashboard from '@/components/AdminDashboard';
+import AuthPage from '@/components/AuthPage';
+import GovernmentDashboard from '@/components/GovernmentDashboard';
+import HomePage from '@/components/HomePage';
+import Leaderboard from '@/components/Leaderboard';
+import Navbar from '@/components/Navbar';
+import ReportedPostsPage from '@/components/ReportedPostsPage';
+import WallOfWins from '@/components/WallOfWins';
 
-function getDefaultPageForUser(user: User | null): PageView {
-  if (!user) {
-    return 'home';
-  }
+type PageView = 'home' | 'reported' | 'leaderboard' | 'wallofwins' | 'government' | 'auth' | 'admin';
 
-  if (user.role === 'admin') {
-    return 'admin';
-  }
-
-  if (user.role === 'authority') {
-    return 'government';
-  }
-
-  return 'home';
-}
-
-function AuthorityPendingState({ user }: { user: User }) {
-  const statusCopy = user.approvalStatus === 'rejected'
-    ? {
-        badge: 'Access rejected',
-        title: 'Authority access is currently rejected.',
-        description: 'An admin needs to review your account again before protected authority routes can be used.',
-      }
-    : {
-        badge: 'Pending approval',
-        title: 'Your authority account is waiting for admin approval.',
-        description: 'You have signed in successfully, but protected authority routes stay locked until an admin validates your account.',
-      };
-
-  return (
-    <div className="min-h-screen bg-background py-12">
-      <div className="mx-auto max-w-3xl px-4">
-        <div className="rounded-[2rem] border border-border bg-card p-8 shadow-sm">
-          <div className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.25em] text-primary">
-            <ShieldCheck className="h-4 w-4" />
-            {statusCopy.badge}
-          </div>
-
-          <h2 className="mt-6 text-3xl font-semibold text-foreground">{statusCopy.title}</h2>
-          <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">{statusCopy.description}</p>
-
-          <div className="mt-8 rounded-2xl border border-border bg-muted/30 p-5">
-            <p className="text-sm font-medium text-foreground">{user.name}</p>
-            <p className="mt-1 text-sm text-muted-foreground">{user.email}</p>
-            <p className="mt-4 text-xs uppercase tracking-[0.2em] text-muted-foreground">
-              Current review state: {user.approvalStatus}
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export default function Page() {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [pageView, setPageView] = useState<PageView>('home');
-  const [hydrated, setHydrated] = useState(false);
+export default function CommunityPortal() {
+  const [user, setUser] = useState<User | null>(null);
+  const [pageView, setPageView] = useState<PageView>('auth');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let cancelled = false;
+    const setup = async () => {
+      try {
+        if (!isFirebaseConfigured()) {
+          console.warn('Firebase is not configured. Please check environment variables.');
+          setLoading(false);
+          return;
+        }
 
-    const loadSession = async () => {
-      await initializeDB();
-      const user = await getCurrentUser();
+        await initializeDB();
+        const currentUser = await getCurrentUser();
 
-      if (cancelled) {
-        return;
+        if (currentUser) {
+          setUser(currentUser);
+          setPageView(getDefaultPage(currentUser));
+        }
+      } catch (error) {
+        console.error('App initialization error', error);
+      } finally {
+        setLoading(false);
       }
-
-      setCurrentUser(user);
-      setPageView(getDefaultPageForUser(user));
-      setHydrated(true);
     };
 
-    void loadSession();
-
-    return () => {
-      cancelled = true;
-    };
+    void setup();
   }, []);
 
-  useEffect(() => {
-    if (!currentUser) {
-      return;
+  const getDefaultPage = (targetUser: User): PageView => {
+    if (targetUser.role === 'admin') return 'admin';
+    if (targetUser.role === 'authority') return 'government';
+    return 'home';
+  };
+
+  const handleAuthSuccess = async () => {
+    const currentUser = await getCurrentUser();
+    if (currentUser) {
+      setUser(currentUser);
+      setPageView(getDefaultPage(currentUser));
     }
+  };
 
-    let cancelled = false;
-
-    const syncCurrentUser = async () => {
-      const refreshedUser = await getCurrentUser();
-
-      if (cancelled) {
-        return;
-      }
-
-      setCurrentUser(refreshedUser);
-
-      if (!refreshedUser) {
-        setPageView('home');
-      }
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        void syncCurrentUser();
-      }
-    };
-
-    const intervalId = window.setInterval(() => {
-      void syncCurrentUser();
-    }, 30000);
-
-    const handleWindowFocus = () => {
-      void syncCurrentUser();
-    };
-
-    window.addEventListener('focus', handleWindowFocus);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleWindowFocus);
-    };
-  }, [currentUser?.id]);
-
-  if (!hydrated) return null;
-
-  const handleLogout = () => {
+  const handleLogout = async () => {
     logoutUser();
-    void signOutFirebaseUser().catch(() => undefined);
-    setCurrentUser(null);
-    setPageView('home');
+    setUser(null);
+    setPageView('auth');
+
+    try {
+      await signOutFirebaseUser();
+    } catch {
+      // If Firebase sign-out fails, do nothing.
+    }
   };
 
-  const handleLogin = async () => {
-    const user = await getCurrentUser();
-    setCurrentUser(user);
-    setPageView(getDefaultPageForUser(user));
-  };
+  if (loading) {
+    return (
+      <div className="portal-shell flex min-h-screen flex-col items-center justify-center gap-4 bg-background text-muted-foreground">
+        <Loader2 className="h-10 w-10 animate-spin text-primary" />
+        <p className="text-lg font-medium">Loading Civic Issue Portal...</p>
+      </div>
+    );
+  }
 
-  const refreshPosts = () => undefined;
+  if (!user || pageView === 'auth') {
+    return (
+      <div className="portal-shell">
+        <AuthPage onAuthSuccess={() => void handleAuthSuccess()} />
+      </div>
+    );
+  }
 
-  const handlePageChange = (view: PageView) => {
-    if (!currentUser) return;
-
-    if (currentUser.role === 'citizen' && (view === 'government' || view === 'admin')) return;
-    if (currentUser.role === 'authority' && (view === 'home' || view === 'reported' || view === 'admin')) return;
-    if (currentUser.role === 'admin' && view !== 'admin') return;
-
-    setPageView(view);
-  };
-
-  if (!currentUser) {
-    return <AuthPage onAuthSuccess={handleLogin} />;
+  // Worker pending approval gate
+  if (user.role === 'authority' && !isAuthorityApproved(user)) {
+    return (
+      <div className="portal-shell flex min-h-screen flex-col items-center justify-center gap-6 bg-background px-6 text-center">
+        <div className="rounded-[1.5rem] border border-amber-500/20 bg-amber-500/10 p-6 text-amber-800 dark:text-amber-200">
+          <h2 className="text-2xl font-semibold">Pending admin approval</h2>
+          <p className="mt-3 text-base leading-7 text-amber-700 dark:text-amber-300">
+            Your municipality worker account has been registered successfully. An admin supervisor must approve your account before you can access the task dashboard.
+          </p>
+          <p className="mt-4 text-sm">
+            Contact your supervisor or check back later. Once approved, you will see your complaint assignments.
+          </p>
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            className="mt-6 rounded-full border border-amber-500/30 bg-amber-500/5 px-6 py-2 text-sm font-semibold text-amber-700 transition hover:bg-amber-500/10 dark:text-amber-200"
+          >
+            Sign out
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="portal-shell min-h-screen bg-background">
-      <Toaster position="top-right" richColors />
+    <div className="portal-shell">
       <Navbar
-        user={currentUser}
-        onLogout={handleLogout}
+        user={user}
+        onLogout={() => void handleLogout()}
         pageView={pageView}
-        onPageChange={handlePageChange}
+        onPageChange={setPageView}
       />
+
       <main>
-        {pageView === 'home' && currentUser.role === 'citizen' && (
-          <HomePage user={currentUser} onPostsChange={refreshPosts} />
+        {pageView === 'home' && (
+          <HomePage user={user} onPostsChange={() => {}} />
         )}
-        {pageView === 'reported' && currentUser.role === 'citizen' && (
-          <ReportedPostsPage user={currentUser} onPostsChange={refreshPosts} />
+        {pageView === 'reported' && (
+          <ReportedPostsPage user={user} onPostsChange={() => {}} />
         )}
-
-        {pageView === 'government' && currentUser.role === 'authority' && currentUser.approvalStatus === 'approved' && (
-          <GovernmentDashboard />
-        )}
-        {pageView === 'government' && currentUser.role === 'authority' && currentUser.approvalStatus !== 'approved' && (
-          <AuthorityPendingState user={currentUser} />
-        )}
-        {pageView === 'tokens' && currentUser.role !== 'admin' && (
-          <TokenWallet user={currentUser} />
-        )}
-        {pageView === 'admin' && currentUser.role === 'admin' && (
-          <AdminDashboard currentUser={currentUser} />
-        )}
-
         {pageView === 'leaderboard' && <Leaderboard />}
         {pageView === 'wallofwins' && <WallOfWins />}
+        {pageView === 'government' && (
+          <GovernmentDashboard user={user} />
+        )}
+        {pageView === 'admin' && (
+          <AdminDashboard user={user} />
+        )}
       </main>
     </div>
   );

@@ -1,7 +1,7 @@
 'use client';
 
 import { type ReactNode, useState } from 'react';
-import { ShieldCheck, Building2, Users, ArrowRight, LockKeyhole, Sparkles } from 'lucide-react';
+import { ShieldCheck, Building2, Users, ArrowRight, LockKeyhole, Sparkles, Phone } from 'lucide-react';
 import {
   AuthMode,
   ADMIN_EMAIL,
@@ -41,6 +41,7 @@ interface AuthorityFormState {
   name: string;
   email: string;
   password: string;
+  phone: string;
   loading: boolean;
   error: string;
 }
@@ -58,8 +59,8 @@ const portalOptions: Array<{
   eyebrow: string;
 }> = [
   { value: 'citizen', label: 'Citizen Login', eyebrow: 'Public portal' },
-  { value: 'authority', label: 'Authority Login', eyebrow: 'Field desk' },
-  { value: 'admin', label: 'Admin Console', eyebrow: 'Control room' },
+  { value: 'authority', label: 'Worker Login', eyebrow: 'Municipality staff' },
+  { value: 'admin', label: 'Admin Console', eyebrow: 'Supervisor' },
 ];
 
 function AuthShell({
@@ -116,16 +117,21 @@ function TextInput({
   onChange,
   placeholder,
   type = 'text',
+  icon,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
-  type?: 'text' | 'email' | 'password';
+  type?: 'text' | 'email' | 'password' | 'tel';
+  icon?: ReactNode;
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">{label}</span>
+      <span className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+        {icon}
+        {label}
+      </span>
       <input
         type={type}
         value={value}
@@ -164,6 +170,7 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
     name: '',
     email: '',
     password: '',
+    phone: '',
     loading: false,
     error: '',
   });
@@ -281,6 +288,7 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
           name: authorityForm.mode === 'signup' ? authorityForm.name : profile.name,
         },
         authorityForm.mode,
+        authorityForm.mode === 'signup' ? { phone: authorityForm.phone } : undefined,
       );
 
       setAuthorityForm(prev => ({ ...prev, loading: false }));
@@ -289,7 +297,7 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
       setAuthorityForm(prev => ({
         ...prev,
         loading: false,
-        error: getFirebaseAuthErrorMessage(error, 'password', 'Authority authentication failed.'),
+        error: getFirebaseAuthErrorMessage(error, 'password', 'Worker authentication failed.'),
       }));
     }
   };
@@ -339,49 +347,49 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
         <section className="portal-card rounded-[2.25rem] border border-border/70 bg-card/90 p-6 md:p-10">
           <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-primary">
             <ShieldCheck className="h-4 w-4" />
-            National civic access
+            Municipality portal
           </div>
 
           <h1 className="portal-title mt-8 max-w-3xl text-4xl font-semibold tracking-tight text-foreground md:text-6xl">
-            Secure entry for citizens, district teams, and the national control room.
+            Report civic issues. Track resolutions. Hold your municipality accountable.
           </h1>
 
           <p className="mt-6 max-w-2xl text-base leading-8 text-muted-foreground md:text-lg">
-            Public users can report issues through Google or email login. Government authorities use Firebase email
-            authentication and are granted protected access only after admin approval. Platform admins manage those
-            approvals from a dedicated control panel.
+            Citizens report potholes, broken streetlights, park issues, and cleanliness problems.
+            Municipality workers resolve them with photo proof. Supervisors ensure SLA compliance and worker accountability.
           </p>
 
           <div className="mt-10 grid gap-4 md:grid-cols-3">
             <div className="rounded-3xl border border-border/70 bg-background/80 p-5">
               <Users className="h-8 w-8 text-primary" />
-              <h2 className="mt-4 text-lg font-semibold text-foreground">Citizen access</h2>
+              <h2 className="mt-4 text-lg font-semibold text-foreground">Citizen</h2>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                Citizens authenticate with Google or email/password and immediately access the reporting experience.
+                Create your account first, then submit complaints with Jalandhar PIN code and exact issue location.
               </p>
             </div>
 
             <div className="rounded-3xl border border-border/70 bg-background/80 p-5">
               <Building2 className="h-8 w-8 text-primary" />
-              <h2 className="mt-4 text-lg font-semibold text-foreground">Authority review</h2>
+              <h2 className="mt-4 text-lg font-semibold text-foreground">Municipality Worker</h2>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                Staff accounts use Firebase email and password, then wait for approval before entering protected flows.
+                Get complaint assignments, update status, and upload resolution proof photos.
               </p>
             </div>
 
             <div className="rounded-3xl border border-border/70 bg-background/80 p-5">
               <LockKeyhole className="h-8 w-8 text-primary" />
-              <h2 className="mt-4 text-lg font-semibold text-foreground">Admin validation</h2>
+              <h2 className="mt-4 text-lg font-semibold text-foreground">Admin Supervisor</h2>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                A separate admin workspace reviews pending authority accounts and controls protected-route access.
+                Approve workers, assign complaints, monitor SLA deadlines, and generate location reports.
               </p>
             </div>
           </div>
 
           <div className="mt-10 flex flex-wrap gap-3 text-sm text-muted-foreground">
-            <span className="rounded-full border border-border/70 bg-background/70 px-4 py-2">Firebase Auth</span>
-            <span className="rounded-full border border-border/70 bg-background/70 px-4 py-2">Firestore approval state</span>
-            <span className="rounded-full border border-border/70 bg-background/70 px-4 py-2">Protected dashboards</span>
+            <span className="rounded-full border border-border/70 bg-background/70 px-4 py-2">SLA Tracking</span>
+            <span className="rounded-full border border-border/70 bg-background/70 px-4 py-2">Location Routing</span>
+            <span className="rounded-full border border-border/70 bg-background/70 px-4 py-2">Before/After Photos</span>
+            <span className="rounded-full border border-border/70 bg-background/70 px-4 py-2">Worker Performance</span>
           </div>
         </section>
 
@@ -406,8 +414,8 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
 
           {portal === 'citizen' && (
             <AuthShell
-              title="Public sign-in"
-              subtitle="Use Google or email/password to enter the citizen reporting portal. New public accounts are provisioned on first sign-up."
+              title="Citizen sign-in"
+              subtitle="Create your account with basic details, then enter Jalandhar location details only when filing a complaint."
             >
               <div className="space-y-5">
                 <ModeToggle
@@ -416,12 +424,14 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
                 />
 
                 {citizenForm.mode === 'signup' && (
-                  <TextInput
-                    label="Full name"
-                    value={citizenForm.name}
-                    onChange={value => setCitizenForm(prev => ({ ...prev, name: value }))}
-                    placeholder="Aarav Sharma"
-                  />
+                  <>
+                    <TextInput
+                      label="Full name"
+                      value={citizenForm.name}
+                      onChange={value => setCitizenForm(prev => ({ ...prev, name: value }))}
+                      placeholder="Aarav Sharma"
+                    />
+                  </>
                 )}
 
                 <TextInput
@@ -452,7 +462,7 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
                     ? 'Authenticating...'
                     : citizenForm.mode === 'signin'
                       ? 'Sign in with email'
-                      : 'Create account with email'}
+                      : 'Create citizen account'}
                   <ArrowRight className="h-4 w-4" />
                 </button>
 
@@ -490,8 +500,8 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
 
           {portal === 'authority' && (
             <AuthShell
-              title="Authority sign-in"
-              subtitle="Use your official authority account. Newly registered authority users are created in Firestore with pending approval and cannot enter protected dashboards until validated by admin."
+              title="Municipality worker sign-in"
+              subtitle="Register as a municipality worker. Your account will be pending until an admin approves it."
             >
               <div className="space-y-5">
                 <ModeToggle
@@ -500,12 +510,22 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
                 />
 
                 {authorityForm.mode === 'signup' && (
-                  <TextInput
-                    label="Full name"
-                    value={authorityForm.name}
-                    onChange={value => setAuthorityForm(prev => ({ ...prev, name: value }))}
-                    placeholder="Aarav Sharma"
-                  />
+                  <>
+                    <TextInput
+                      label="Full name"
+                      value={authorityForm.name}
+                      onChange={value => setAuthorityForm(prev => ({ ...prev, name: value }))}
+                      placeholder="Rajesh Kumar"
+                    />
+                    <TextInput
+                      label="Contact number"
+                      type="tel"
+                      value={authorityForm.phone}
+                      onChange={value => setAuthorityForm(prev => ({ ...prev, phone: value }))}
+                      placeholder="+91 98765 43210"
+                      icon={<Phone className="h-3 w-3" />}
+                    />
+                  </>
                 )}
 
                 <TextInput
@@ -513,7 +533,7 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
                   type="email"
                   value={authorityForm.email}
                   onChange={value => setAuthorityForm(prev => ({ ...prev, email: value }))}
-                  placeholder="department@gov.example"
+                  placeholder="worker@municipality.gov.in"
                 />
 
                 <TextInput
@@ -535,16 +555,16 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
                   {authorityForm.loading
                     ? 'Authenticating...'
                     : authorityForm.mode === 'signin'
-                      ? 'Sign in as authority'
-                      : 'Create authority account'}
+                      ? 'Sign in as worker'
+                      : 'Register as worker'}
                   <ArrowRight className="h-4 w-4" />
                 </button>
 
                 <div className="rounded-2xl border border-border/70 bg-muted/20 p-4 text-sm leading-6 text-muted-foreground">
                   <p className="font-medium text-foreground">Approval workflow</p>
                   <p className="mt-2">
-                    After sign-up, your account is marked as pending in Firestore. An admin must approve it before
-                    authority-only routes unlock.
+                    After sign-up, your account is marked as pending. An admin must approve it before
+                    you can see your task dashboard and start resolving complaints.
                   </p>
                 </div>
               </div>
@@ -553,8 +573,8 @@ export default function AuthPage({ onAuthSuccess }: AuthPageProps) {
 
           {portal === 'admin' && (
             <AuthShell
-              title="Admin control"
-              subtitle="Temporary admin entry for approval management. It still depends on Firebase Email/Password auth so the admin can read and update Firestore."
+              title="Admin supervisor console"
+              subtitle="Sign in to approve workers, assign complaints, monitor SLA compliance, and generate location reports."
             >
               <div className="space-y-5">
                 <TextInput
